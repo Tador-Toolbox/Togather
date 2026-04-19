@@ -15,6 +15,7 @@ async function apiFetch(path, opts = {}, session = null) {
   if (session) {
     headers["familyid"] = session.familyId;
     headers["password"] = session.password;
+    headers["role"] = session.role;
   }
   const res = await fetch(API + path, { ...opts, headers });
   if (!res.ok) {
@@ -462,25 +463,25 @@ function AdminPanel({ onLogout }) {
   const [adminPwd] = useState(() => localStorage.getItem("tg_admin_pwd") || "");
   const [families, setFamilies] = useState([]);
   const [newName, setNewName] = useState("");
-  const [newPwd, setNewPwd] = useState("");
+  const [newDadPwd, setNewDadPwd] = useState("");
+  const [newMomPwd, setNewMomPwd] = useState("");
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
+  const [showPwds, setShowPwds] = useState({}); // familyId -> bool
+  const [editPwds, setEditPwds] = useState({}); // familyId -> {dad,mom}
 
   const load = useCallback(async () => {
-    try {
-      const data = await adminFetch("/api/admin/families", {}, adminPwd);
-      setFamilies(data);
-    } catch (e) { setError(e.message); }
+    try { setFamilies(await adminFetch("/api/admin/families", {}, adminPwd)); }
+    catch (e) { setError(e.message); }
   }, [adminPwd]);
-
   useEffect(() => { load(); }, [load]);
 
   const addFamily = async () => {
-    if (!newName || !newPwd) return;
+    if (!newName || !newDadPwd || !newMomPwd) return;
     setSaving(true); setError(null);
     try {
-      await adminFetch("/api/admin/families", { method: "POST", body: JSON.stringify({ name: newName, password: newPwd }) }, adminPwd);
-      setNewName(""); setNewPwd(""); load();
+      await adminFetch("/api/admin/families", { method: "POST", body: JSON.stringify({ name: newName, dadPassword: newDadPwd, momPassword: newMomPwd }) }, adminPwd);
+      setNewName(""); setNewDadPwd(""); setNewMomPwd(""); load();
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   };
@@ -491,11 +492,13 @@ function AdminPanel({ onLogout }) {
     catch (e) { setError(e.message); }
   };
 
-  const resetPwd = async (id) => {
-    const pwd = window.prompt("סיסמה חדשה:");
-    if (!pwd) return;
-    try { await adminFetch(`/api/admin/families/${id}/password`, { method: "PUT", body: JSON.stringify({ password: pwd }) }, adminPwd); alert("סיסמה עודכנה ✓"); }
-    catch (e) { setError(e.message); }
+  const savePwds = async (id) => {
+    const { dad, mom } = editPwds[id] || {};
+    if (!dad && !mom) return;
+    try {
+      await adminFetch(`/api/admin/families/${id}/passwords`, { method: "PUT", body: JSON.stringify({ dadPassword: dad || undefined, momPassword: mom || undefined }) }, adminPwd);
+      setEditPwds(prev => ({ ...prev, [id]: {} })); load();
+    } catch (e) { setError(e.message); }
   };
 
   return (
@@ -506,19 +509,24 @@ function AdminPanel({ onLogout }) {
       </div>
       <div className="admin-body">
         {error && <div className="error-msg" style={{ marginBottom: 16 }}>{error}</div>}
+
         <div className="admin-section-title">הוסף משפחה חדשה</div>
         <div className="add-family-card">
+          <div className="field" style={{ margin: "0 0 10px" }}>
+            <label>שם משפחה</label>
+            <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="כהן" />
+          </div>
           <div className="add-row">
             <div className="field" style={{ margin: 0 }}>
-              <label>שם משפחה</label>
-              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="כהן" />
+              <label>👨 סיסמת אבא</label>
+              <input value={newDadPwd} onChange={e => setNewDadPwd(e.target.value)} placeholder="לדוגמא: dad123" />
             </div>
             <div className="field" style={{ margin: 0 }}>
-              <label>סיסמה</label>
-              <input type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)} placeholder="••••••" />
+              <label>👩 סיסמת אמא</label>
+              <input value={newMomPwd} onChange={e => setNewMomPwd(e.target.value)} placeholder="לדוגמא: mom123" />
             </div>
           </div>
-          <button className="add-btn" onClick={addFamily} disabled={saving || !newName || !newPwd}>
+          <button className="add-btn" onClick={addFamily} disabled={saving || !newName || !newDadPwd || !newMomPwd}>
             {saving ? "שומר..." : "+ הוסף משפחה"}
           </button>
         </div>
@@ -527,19 +535,56 @@ function AdminPanel({ onLogout }) {
         {families.length === 0 && <div className="empty-families">אין משפחות עדיין</div>}
         <div className="families-list">
           {families.map(f => (
-            <div key={f.id} className="family-card">
-              <div className="family-icon">👨‍👩‍👧</div>
-              <div className="family-info">
-                <div className="family-name">משפחת {f.name}</div>
-                <div className="family-meta">
-                  נוצר: {new Date(f.createdAt).toLocaleDateString("he-IL")}
-                  {f.lastActive && ` · פעיל לאחרונה: ${new Date(f.lastActive).toLocaleDateString("he-IL")}`}
+            <div key={f.id} className="family-card" style={{ flexDirection: "column", alignItems: "stretch", gap: 10 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+                <div className="family-icon">👨‍👩‍👧</div>
+                <div className="family-info">
+                  <div className="family-name">משפחת {f.name}</div>
+                  <div className="family-meta">
+                    נוצר: {new Date(f.createdAt).toLocaleDateString("he-IL")}
+                    {f.lastActive && ` · פעיל: ${new Date(f.lastActive).toLocaleDateString("he-IL")}`}
+                  </div>
+                </div>
+                <div className="family-actions">
+                  <button className="fam-btn" onClick={() => setShowPwds(prev => ({ ...prev, [f.id]: !prev[f.id] }))}>
+                    {showPwds[f.id] ? "🔒 הסתר" : "👁 סיסמאות"}
+                  </button>
+                  <button className="fam-btn del" onClick={() => deleteFamily(f.id, f.name)}>🗑️</button>
                 </div>
               </div>
-              <div className="family-actions">
-                <button className="fam-btn" onClick={() => resetPwd(f.id)}>🔑 איפוס</button>
-                <button className="fam-btn del" onClick={() => deleteFamily(f.id, f.name)}>🗑️</button>
-              </div>
+
+              {showPwds[f.id] && (
+                <div style={{ background: "var(--surface2)", borderRadius: 8, padding: "10px 12px", display: "flex", flexDirection: "column", gap: 8 }}>
+                  <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8 }}>
+                    <div>
+                      <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>👨 סיסמת אבא</div>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: "var(--dad)", background: "var(--dad-bg)", padding: "5px 10px", borderRadius: 6, border: "1px solid var(--dad-border)" }}>
+                        {f.dadPassword}
+                      </div>
+                    </div>
+                    <div>
+                      <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 4 }}>👩 סיסמת אמא</div>
+                      <div style={{ fontSize: 13, fontWeight: 500, color: "var(--mom)", background: "var(--mom-bg)", padding: "5px 10px", borderRadius: 6, border: "1px solid var(--mom-border)" }}>
+                        {f.momPassword}
+                      </div>
+                    </div>
+                  </div>
+                  <div style={{ borderTop: "1px solid var(--border)", paddingTop: 8 }}>
+                    <div style={{ fontSize: 11, color: "var(--text3)", marginBottom: 6 }}>שנה סיסמאות</div>
+                    <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 6 }}>
+                      <input style={{ fontSize: 12, padding: "6px 8px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)" }}
+                        placeholder="סיסמה חדשה לאבא"
+                        value={editPwds[f.id]?.dad || ""}
+                        onChange={e => setEditPwds(prev => ({ ...prev, [f.id]: { ...prev[f.id], dad: e.target.value } }))} />
+                      <input style={{ fontSize: 12, padding: "6px 8px", background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 6, color: "var(--text)" }}
+                        placeholder="סיסמה חדשה לאמא"
+                        value={editPwds[f.id]?.mom || ""}
+                        onChange={e => setEditPwds(prev => ({ ...prev, [f.id]: { ...prev[f.id], mom: e.target.value } }))} />
+                    </div>
+                    <button className="add-btn" style={{ marginTop: 6, padding: "7px 14px", fontSize: 12 }} onClick={() => savePwds(f.id)}>שמור שינויים</button>
+                  </div>
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -551,6 +596,7 @@ function AdminPanel({ onLogout }) {
 // ── Login Screen ──────────────────────────────────────────────────────────────
 function LoginScreen({ onLogin, onAdminLogin }) {
   const [name, setName] = useState("");
+  const [role, setRole] = useState(null); // "dad" | "mom"
   const [password, setPassword] = useState("");
   const [error, setError] = useState(null);
   const [loading, setLoading] = useState(false);
@@ -558,10 +604,11 @@ function LoginScreen({ onLogin, onAdminLogin }) {
   const [adminPwd, setAdminPwd] = useState("");
 
   const handleLogin = async () => {
+    if (!name || !password || !role) return;
     setLoading(true); setError(null);
     try {
-      const res = await apiFetch("/api/family/login", { method: "POST", body: JSON.stringify({ name, password }) });
-      onLogin({ familyId: res.familyId, familyName: res.familyName, password });
+      const res = await apiFetch("/api/family/login", { method: "POST", body: JSON.stringify({ name, password, role }) });
+      onLogin({ familyId: res.familyId, familyName: res.familyName, password, role: res.role });
     } catch (e) { setError(e.message); }
     finally { setLoading(false); }
   };
@@ -588,13 +635,24 @@ function LoginScreen({ onLogin, onAdminLogin }) {
           {error && <div className="login-err">{error}</div>}
           <div className="field">
             <label>שם משפחה</label>
-            <input value={name} onChange={e => setName(e.target.value)} placeholder="כהן" onKeyDown={e => e.key === "Enter" && handleLogin()} />
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="כהן" />
+          </div>
+          <div className="field">
+            <label>אני</label>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 8, marginTop: 2 }}>
+              <button onClick={() => setRole("dad")} style={{ padding: "10px", borderRadius: 10, border: `1.5px solid ${role === "dad" ? "var(--dad)" : "var(--border)"}`, background: role === "dad" ? "var(--dad-bg)" : "var(--surface2)", color: role === "dad" ? "var(--dad-text)" : "var(--text2)", cursor: "pointer", fontSize: 14, fontFamily: "inherit" }}>
+                👨 אבא
+              </button>
+              <button onClick={() => setRole("mom")} style={{ padding: "10px", borderRadius: 10, border: `1.5px solid ${role === "mom" ? "var(--mom)" : "var(--border)"}`, background: role === "mom" ? "var(--mom-bg)" : "var(--surface2)", color: role === "mom" ? "var(--mom-text)" : "var(--text2)", cursor: "pointer", fontSize: 14, fontFamily: "inherit" }}>
+                👩 אמא
+              </button>
+            </div>
           </div>
           <div className="field">
             <label>סיסמה</label>
             <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••" onKeyDown={e => e.key === "Enter" && handleLogin()} />
           </div>
-          <button className="login-btn" onClick={handleLogin} disabled={loading || !name || !password}>
+          <button className="login-btn" onClick={handleLogin} disabled={loading || !name || !password || !role}>
             {loading ? "מתחבר..." : "כניסה →"}
           </button>
           <div className="admin-link" onClick={() => { setShowAdmin(true); setError(null); }}>כניסת מנהל</div>
@@ -622,7 +680,7 @@ export default function App() {
   const [session, setSession] = useState(() => getSession());
   const [isAdmin, setIsAdmin] = useState(false);
   const [view, setView] = useState("home");
-  const [role, setRole] = useState(() => localStorage.getItem(ROLE_KEY) || null);
+  const role = session?.role || null; // role comes from session now
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -659,12 +717,12 @@ export default function App() {
   const todayScheduled = useCallback(() => data?.schedule ? getScheduledOwner(new Date(), data.schedule) : null, [data]);
 
   const handleMark = async () => {
-    if (!role || saving || !session) return;
+    if (!session || saving) return;
     setSaving(true);
     try {
-      const res = await apiFetch("/api/family/mark", { method: "POST", body: JSON.stringify({ parent: role }) }, session);
+      const res = await apiFetch("/api/family/mark", { method: "POST", body: JSON.stringify({}) }, session);
       setData(prev => ({ ...prev, currentWith: res.currentWith, liveLog: [res.entry, ...prev.liveLog] }));
-      showToast(`✓ ${role === "dad" ? "אבא" : "אמא"} סימן/ה בהצלחה`, role);
+      showToast(`✓ ${session.role === "dad" ? "אבא" : "אמא"} סימן/ה בהצלחה`, session.role);
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   };
@@ -762,15 +820,11 @@ export default function App() {
             <div className="home-header">
               <span className="home-icon">👨‍👩‍👧</span>
               <div className="home-title">Togather</div>
-              <div className="home-family">משפחת {session.familyName}</div>
-            </div>
-            <div className="section-label">אני הורה:</div>
-            <div className="role-btns">
-              {[{ k: "dad", e: "👨", n: "אבא" }, { k: "mom", e: "👩", n: "אמא" }].map(r => (
-                <button key={r.k} className={`role-btn ${r.k} ${role === r.k ? "active" : ""}`} onClick={() => saveRole(r.k)}>
-                  <span className="re">{r.e}</span><span className="rn">{r.n}</span>
-                </button>
-              ))}
+              <div className="home-family">
+              משפחת {session.familyName} ·{" "}
+              <span style={{ color: role === "dad" ? "var(--dad)" : "var(--mom)", fontWeight: 500 }}>
+                {role === "dad" ? "👨 אבא" : "👩 אמא"}
+              </span>
             </div>
             {data && (
               <div className="today-card">
