@@ -582,6 +582,8 @@ function NotificationPanel({ notifications, role, onSeen, onDismiss, onRespondSw
   );
 }
 
+// ── Admin Panel ───────────────────────────────────────────────────────────────
+function AdminPanel({ onLogout }) {
   const [adminPwd] = useState(() => localStorage.getItem("tg_admin_pwd") || "");
   const [families, setFamilies] = useState([]);
   const [newName, setNewName] = useState("");
