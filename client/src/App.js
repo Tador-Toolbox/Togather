@@ -1,24 +1,47 @@
 import { useState, useEffect, useCallback } from "react";
 
+// ── API ───────────────────────────────────────────────────────────────────────
 const API = process.env.REACT_APP_API_URL || "";
-// ← שנה את הכתובת הזו לכתובת שלך ב-Render אחרי העלאה
-const APP_URL = process.env.REACT_APP_PUBLIC_URL || window.location.origin;
+const APP_URL = window.location.origin;
 
-async function apiFetch(path, opts = {}) {
-  const res = await fetch(API + path, { headers: { "Content-Type": "application/json" }, ...opts });
-  if (!res.ok) throw new Error(await res.text());
+function getSession() {
+  try { return JSON.parse(localStorage.getItem("tg_session") || "null"); } catch { return null; }
+}
+function saveSession(s) { localStorage.setItem("tg_session", JSON.stringify(s)); }
+function clearSession() { localStorage.removeItem("tg_session"); }
+
+async function apiFetch(path, opts = {}, session = null) {
+  const headers = { "Content-Type": "application/json", ...opts.headers };
+  if (session) {
+    headers["familyid"] = session.familyId;
+    headers["password"] = session.password;
+  }
+  const res = await fetch(API + path, { ...opts, headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
   return res.json();
 }
 
+async function adminFetch(path, opts = {}, adminPassword = "") {
+  const headers = { "Content-Type": "application/json", adminpassword: adminPassword, ...opts.headers };
+  const res = await fetch(API + path, { ...opts, headers });
+  if (!res.ok) {
+    const err = await res.json().catch(() => ({ error: res.statusText }));
+    throw new Error(err.error || res.statusText);
+  }
+  return res.json();
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 const DAYS_HE = ["ראשון", "שני", "שלישי", "רביעי", "חמישי", "שישי", "שבת"];
 const MONTHS_HE = ["ינואר","פברואר","מרץ","אפריל","מאי","יוני","יולי","אוגוסט","ספטמבר","אוקטובר","נובמבר","דצמבר"];
-const ROLE_KEY = "cp_role";
+const ROLE_KEY = "tg_role";
 
-const formatDate = (iso) =>
-  new Date(iso).toLocaleString("he-IL", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
-const formatDateShort = (iso) =>
-  new Date(iso).toLocaleDateString("he-IL", { weekday: "short", day: "numeric", month: "short" });
 const toDateStr = (d) => d.toISOString().slice(0, 10);
+const formatDate = (iso) => new Date(iso).toLocaleString("he-IL", { weekday: "long", day: "numeric", month: "long", hour: "2-digit", minute: "2-digit" });
+const formatDateShort = (iso) => new Date(iso).toLocaleDateString("he-IL", { weekday: "short", day: "numeric", month: "short" });
 
 const getWeekNumber = (d = new Date()) => {
   const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
@@ -34,87 +57,100 @@ function getScheduledOwner(date, schedule) {
   if (schedule.fixed.mom.includes(dow)) return "mom";
   if (schedule.rotating.days.includes(dow)) {
     const wk = getWeekNumber(date);
-    const dadWk = schedule.rotating.currentWeekDad ? wk % 2 === 0 : wk % 2 !== 0;
-    return dadWk ? "dad" : "mom";
+    return (schedule.rotating.currentWeekDad ? wk % 2 === 0 : wk % 2 !== 0) ? "dad" : "mom";
   }
   return null;
 }
 
 function buildUpcomingDays(schedule) {
-  const days = [];
-  const today = new Date();
-  const wk = getWeekNumber();
+  const days = [], today = new Date(), wk = getWeekNumber();
   for (let i = 0; i < 14; i++) {
-    const d = new Date(today);
-    d.setDate(today.getDate() + i);
-    const dow = d.getDay();
-    const dateStr = toDateStr(d);
+    const d = new Date(today); d.setDate(today.getDate() + i);
+    const dow = d.getDay(), dateStr = toDateStr(d);
     let owner = null;
     if (schedule.fixed.dad.includes(dow)) owner = "dad";
     else if (schedule.fixed.mom.includes(dow)) owner = "mom";
     else if (schedule.rotating.days.includes(dow)) {
       const effectiveWk = wk + Math.floor(i / 7);
-      const dadWk = schedule.rotating.currentWeekDad ? effectiveWk % 2 === 0 : effectiveWk % 2 !== 0;
-      owner = dadWk ? "dad" : "mom";
+      owner = (schedule.rotating.currentWeekDad ? effectiveWk % 2 === 0 : effectiveWk % 2 !== 0) ? "dad" : "mom";
     }
     days.push({ date: dateStr, dow, label: DAYS_HE[dow] + " " + dateStr.slice(5).replace("-", "/"), owner, d });
   }
   return days;
 }
 
-// ── CSS — Light Theme ─────────────────────────────────────────────────────────
+// ── CSS ───────────────────────────────────────────────────────────────────────
 const CSS = `
 @import url('https://fonts.googleapis.com/css2?family=Fraunces:ital,wght@0,300;0,400;0,700;1,400&family=DM+Sans:wght@300;400;500&display=swap');
 *{box-sizing:border-box;margin:0;padding:0}
-
 :root{
-  --bg:#f5f3ef;
-  --surface:#ffffff;
-  --surface2:#eeecea;
-  --border:#e0dcd6;
-  --border2:#ccc8c0;
-  --text:#1a1814;
-  --text2:#6b6560;
-  --text3:#a09890;
-  --dad:#2563a8;
-  --dad-bg:#deeaf8;
-  --dad-border:#b8d0ef;
-  --dad-text:#1a4a80;
-  --mom:#8b2d8b;
-  --mom-bg:#f2e0f2;
-  --mom-border:#dbb0db;
-  --mom-text:#6a1a6a;
-  --green:#3a7a20;
-  --green-bg:#e4f2d8;
-  --green-border:#b8dca0;
-  --amber:#c07010;
-  --amber-bg:#faf0d8;
-  --amber-border:#e0c070;
-  --red:#b02020;
-  --red-bg:#fae8e8;
-  --red-border:#e0b0b0;
+  --bg:#f5f3ef;--surface:#ffffff;--surface2:#eeecea;
+  --border:#e0dcd6;--border2:#ccc8c0;
+  --text:#1a1814;--text2:#6b6560;--text3:#a09890;
+  --dad:#2563a8;--dad-bg:#deeaf8;--dad-border:#b8d0ef;--dad-text:#1a4a80;
+  --mom:#8b2d8b;--mom-bg:#f2e0f2;--mom-border:#dbb0db;--mom-text:#6a1a6a;
+  --green:#3a7a20;--green-bg:#e4f2d8;--green-border:#b8dca0;
+  --amber:#c07010;--amber-bg:#faf0d8;--amber-border:#e0c070;
+  --red:#b02020;--red-bg:#fae8e8;--red-border:#e0b0b0;
+  --admin:#4a3a8a;--admin-bg:#edeaf8;--admin-border:#c8c0e8;
 }
-
 html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;color:var(--text);direction:rtl}
 #root{height:100%}
-.app{max-width:430px;margin:0 auto;min-height:100vh;background:var(--bg);position:relative}
+.app{max-width:430px;margin:0 auto;min-height:100vh;background:var(--bg)}
+
+/* ── LOGIN ── */
+.login-wrap{min-height:100vh;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:32px 24px}
+.login-logo{font-size:52px;margin-bottom:12px}
+.login-title{font-family:'Fraunces',serif;font-size:32px;font-weight:300;color:var(--text);margin-bottom:4px}
+.login-sub{font-size:12px;color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:36px}
+.login-card{background:var(--surface);border:1px solid var(--border);border-radius:18px;padding:24px;width:100%}
+.login-card-title{font-family:'Fraunces',serif;font-size:18px;font-weight:300;color:var(--text);margin-bottom:18px}
+.field{margin-bottom:14px}
+.field label{display:block;font-size:12px;color:var(--text2);margin-bottom:5px;letter-spacing:.5px}
+.field input{width:100%;background:var(--surface2);border:1px solid var(--border);border-radius:9px;color:var(--text);font-size:14px;padding:10px 12px;font-family:'DM Sans',sans-serif}
+.field input:focus{outline:none;border-color:var(--dad)}
+.login-btn{width:100%;background:var(--dad);border:none;color:#fff;border-radius:10px;padding:13px;font-size:14px;font-weight:500;font-family:'DM Sans',sans-serif;cursor:pointer;margin-top:4px;transition:filter .15s}
+.login-btn:hover{filter:brightness(1.08)}
+.login-btn:disabled{background:var(--border2);cursor:default}
+.login-err{background:var(--red-bg);border:1px solid var(--red-border);border-radius:8px;padding:9px 12px;font-size:12px;color:var(--red);margin-bottom:12px}
+.admin-link{margin-top:20px;text-align:center;font-size:12px;color:var(--text3);cursor:pointer;text-decoration:underline}
+
+/* ── ADMIN ── */
+.admin-wrap{min-height:100vh;background:var(--admin-bg);padding:0}
+.admin-header{background:var(--admin);color:#fff;padding:16px 20px;display:flex;align-items:center;justify-content:space-between}
+.admin-title{font-family:'Fraunces',serif;font-size:18px;font-weight:300}
+.admin-logout{background:rgba(255,255,255,.15);border:1px solid rgba(255,255,255,.3);color:#fff;border-radius:7px;padding:5px 12px;cursor:pointer;font-size:12px;font-family:'DM Sans',sans-serif}
+.admin-body{padding:20px}
+.admin-section-title{font-family:'Fraunces',serif;font-size:16px;font-weight:300;color:var(--admin);margin-bottom:14px}
+.add-family-card{background:var(--surface);border:1px solid var(--admin-border);border-radius:14px;padding:18px;margin-bottom:20px}
+.add-row{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:10px}
+.add-btn{background:var(--admin);border:none;color:#fff;border-radius:9px;padding:10px 16px;cursor:pointer;font-size:13px;font-weight:500;font-family:'DM Sans',sans-serif;transition:filter .15s}
+.add-btn:hover{filter:brightness(1.1)}
+.families-list{display:flex;flex-direction:column;gap:8px}
+.family-card{background:var(--surface);border:1px solid var(--border);border-radius:12px;padding:14px 16px;display:flex;align-items:center;gap:12px}
+.family-icon{font-size:24px}
+.family-info{flex:1}
+.family-name{font-size:14px;font-weight:500;color:var(--text)}
+.family-meta{font-size:11px;color:var(--text3);margin-top:2px}
+.family-actions{display:flex;gap:6px}
+.fam-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text2);border-radius:7px;padding:5px 10px;cursor:pointer;font-size:11px;font-family:'DM Sans',sans-serif}
+.fam-btn.del{background:var(--red-bg);border-color:var(--red-border);color:var(--red)}
+.empty-families{text-align:center;padding:32px;color:var(--text3);font-size:13px}
 
 /* ── HOME ── */
-.home{min-height:100vh;display:flex;flex-direction:column;padding:44px 24px 32px}
-.home-header{text-align:center;margin-bottom:32px}
-.home-icon{font-size:50px;display:block;margin-bottom:10px}
-.home-title{font-family:'Fraunces',serif;font-size:28px;font-weight:300;line-height:1.25;letter-spacing:-.5px;color:var(--text)}
-.home-sub{font-size:11px;color:var(--text3);margin-top:6px;letter-spacing:1px;text-transform:uppercase}
-
+.home{min-height:100vh;display:flex;flex-direction:column;padding:40px 24px 32px}
+.home-header{text-align:center;margin-bottom:28px}
+.home-icon{font-size:48px;display:block;margin-bottom:10px}
+.home-title{font-family:'Fraunces',serif;font-size:30px;font-weight:300;color:var(--text)}
+.home-family{font-size:13px;color:var(--text3);margin-top:4px}
 .section-label{font-size:11px;letter-spacing:2px;text-transform:uppercase;color:var(--text3);margin-bottom:9px}
-.role-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:20px}
+.role-btns{display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:18px}
 .role-btn{padding:18px 12px;border-radius:14px;border:1.5px solid var(--border);cursor:pointer;text-align:center;transition:all .2s;font-family:'Fraunces',serif;font-size:16px;font-weight:300;background:var(--surface);color:var(--text2)}
 .role-btn .re{font-size:26px;display:block;margin-bottom:5px}
-.role-btn .rn{font-size:12px;font-family:'DM Sans',sans-serif;opacity:.8}
+.role-btn .rn{font-size:12px;font-family:'DM Sans',sans-serif}
 .role-btn.dad.active{background:var(--dad-bg);border-color:var(--dad);color:var(--dad-text)}
 .role-btn.mom.active{background:var(--mom-bg);border-color:var(--mom);color:var(--mom-text)}
-
-.today-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:14px 16px;margin-bottom:16px;display:flex;align-items:center;gap:10px}
+.today-card{background:var(--surface);border:1px solid var(--border);border-radius:14px;padding:13px 15px;margin-bottom:14px;display:flex;align-items:center;gap:10px}
 .today-dot{width:9px;height:9px;border-radius:50%;flex-shrink:0}
 .today-dot.dad{background:var(--dad);box-shadow:0 0 0 3px var(--dad-bg)}
 .today-dot.mom{background:var(--mom);box-shadow:0 0 0 3px var(--mom-bg)}
@@ -122,27 +158,25 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .today-text{font-size:13px;color:var(--text2);line-height:1.55}
 .cp.dad{color:var(--dad);font-weight:500}
 .cp.mom{color:var(--mom);font-weight:500}
-
-.swap-alert{background:var(--green-bg);border:1px solid var(--green-border);border-radius:12px;padding:12px 15px;margin-bottom:16px;cursor:pointer;transition:all .2s}
-.swap-alert:hover{filter:brightness(.97)}
+.swap-alert{background:var(--green-bg);border:1px solid var(--green-border);border-radius:12px;padding:12px 15px;margin-bottom:14px;cursor:pointer}
 .swap-alert-top{display:flex;align-items:center;gap:8px;margin-bottom:3px}
 .swap-alert-dot{width:7px;height:7px;border-radius:50%;background:var(--green);animation:blink 1.5s infinite;flex-shrink:0}
 @keyframes blink{0%,100%{opacity:1}50%{opacity:.2}}
 .swap-alert-title{font-size:13px;font-weight:500;color:var(--green)}
 .swap-alert-sub{font-size:12px;color:#5a8a40}
-
 .nav-grid{display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-top:auto}
 .nav-btn{padding:16px 12px;border-radius:12px;background:var(--surface);border:1px solid var(--border);color:var(--text2);cursor:pointer;text-align:center;transition:all .15s;font-size:12px;font-family:'DM Sans',sans-serif;position:relative}
 .nav-btn:hover{background:var(--surface2);border-color:var(--border2);transform:translateY(-1px)}
 .nav-btn .ni{font-size:22px;display:block;margin-bottom:5px}
 .nav-btn.hl{background:var(--dad-bg);border-color:var(--dad-border);color:var(--dad-text)}
 .nav-badge{position:absolute;top:9px;left:9px;background:var(--red);color:#fff;border-radius:10px;font-size:10px;padding:1px 6px;font-weight:600}
+.logout-btn{margin-top:12px;width:100%;background:var(--surface2);border:1px solid var(--border);color:var(--text3);border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-family:'DM Sans',sans-serif}
 
 /* ── VIEW SHELL ── */
 .view{min-height:100vh;display:flex;flex-direction:column;background:var(--bg)}
-.vheader{padding:15px 20px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--surface);z-index:10;box-shadow:0 1px 0 var(--border)}
-.back-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;transition:all .15s}
-.back-btn:hover{background:var(--border);color:var(--text)}
+.vheader{padding:14px 18px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;gap:10px;position:sticky;top:0;background:var(--surface);z-index:10}
+.back-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text2);border-radius:8px;padding:6px 12px;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif}
+.back-btn:hover{background:var(--border)}
 .vtitle{font-family:'Fraunces',serif;font-size:18px;font-weight:300;color:var(--text)}
 .vbody{padding:20px;flex:1}
 
@@ -159,10 +193,7 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .mark-btn .me{font-size:34px}
 .mark-btn:not(.disabled):active{transform:scale(.94)}
 .hint{text-align:center;font-size:12px;color:var(--text3);line-height:1.7}
-.sync-badge{font-size:11px;color:var(--text3);text-align:center;padding:6px 0 0;letter-spacing:.5px}
-
-.loading-spinner{text-align:center;padding:60px 0;color:var(--text3);font-size:13px}
-.error-msg{background:var(--red-bg);border:1px solid var(--red-border);border-radius:10px;padding:12px 15px;font-size:13px;color:var(--red);margin-bottom:14px}
+.sync-badge{font-size:11px;color:var(--text3);text-align:center;padding:6px 0 0}
 
 /* ── LOG ── */
 .log-list{display:flex;flex-direction:column;gap:7px}
@@ -178,6 +209,8 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .empty{text-align:center;padding:60px 20px;color:var(--text3);font-size:13px}
 .empty .ei{font-size:40px;display:block;margin-bottom:12px}
 .clear-btn{background:var(--red-bg);border:1px solid var(--red-border);color:var(--red);border-radius:9px;padding:10px 14px;cursor:pointer;font-size:12px;font-family:'DM Sans',sans-serif;margin-top:14px;width:100%}
+.loading-spinner{text-align:center;padding:60px 0;color:var(--text3);font-size:13px}
+.error-msg{background:var(--red-bg);border:1px solid var(--red-border);border-radius:10px;padding:12px 15px;font-size:13px;color:var(--red);margin-bottom:14px}
 
 /* ── SCHEDULE ── */
 .sched-section{margin-bottom:20px}
@@ -195,14 +228,11 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .legend{display:flex;gap:13px;flex-wrap:wrap;margin-bottom:16px}
 .li{display:flex;align-items:center;gap:5px;font-size:12px;color:var(--text2)}
 .ld{width:8px;height:8px;border-radius:50%}
-.edit-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text2);border-radius:10px;padding:11px 16px;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;width:100%;margin-top:10px;transition:all .2s}
-.edit-btn:hover{background:var(--border)}
+.edit-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text2);border-radius:10px;padding:11px 16px;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;width:100%;margin-top:10px}
 .save-btn{background:var(--dad);border:none;color:#fff;border-radius:10px;padding:12px 16px;cursor:pointer;font-size:14px;font-weight:500;font-family:'DM Sans',sans-serif;width:100%;margin-top:8px}
-.save-btn:hover{background:var(--dad-text)}
 .cancel-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text2);border-radius:10px;padding:10px 16px;cursor:pointer;font-size:13px;font-family:'DM Sans',sans-serif;width:100%;margin-top:8px}
 .days-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:4px;margin-bottom:6px}
 .dp{padding:8px 0;border-radius:7px;text-align:center;font-size:11px;border:1px solid var(--border);background:var(--surface2);color:var(--text3);cursor:pointer;transition:all .15s;user-select:none}
-.dp:hover{border-color:var(--border2);color:var(--text2)}
 .dp.dad{background:var(--dad-bg);border-color:var(--dad-border);color:var(--dad-text)}
 .dp.mom{background:var(--mom-bg);border-color:var(--mom-border);color:var(--mom-text)}
 .dp.rot{background:var(--amber-bg);border-color:var(--amber-border);color:var(--amber)}
@@ -215,19 +245,17 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .toggle.on::after{transform:translateX(-20px)}
 
 /* ── CALENDAR ── */
-.cal-container{}
 .cal-nav-row{display:flex;align-items:center;justify-content:space-between;margin-bottom:14px}
 .cal-month-title{font-family:'Fraunces',serif;font-size:20px;font-weight:300;color:var(--text)}
 .cal-year-sub{font-size:12px;color:var(--text3);margin-top:2px}
 .cal-arrow{background:var(--surface);border:1px solid var(--border);color:var(--text2);border-radius:8px;width:32px;height:32px;cursor:pointer;font-size:16px;display:flex;align-items:center;justify-content:center}
-.cal-arrow:hover{background:var(--surface2)}
 .cal-legend{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
 .cal-leg{display:flex;align-items:center;gap:5px;font-size:11px;color:var(--text2)}
 .cal-leg-dot{width:7px;height:7px;border-radius:50%}
 .dow-row{display:grid;grid-template-columns:repeat(7,1fr);margin-bottom:4px}
 .dow-cell{text-align:center;font-size:10px;color:var(--text3);padding:3px 0;font-weight:500}
 .cal-grid{display:grid;grid-template-columns:repeat(7,1fr);gap:3px}
-.dc{min-height:44px;border-radius:8px;padding:5px 3px 4px;cursor:pointer;position:relative;display:flex;flex-direction:column;align-items:center;border:1px solid transparent;transition:all .12s;user-select:none;background:transparent}
+.dc{min-height:44px;border-radius:8px;padding:5px 3px 4px;cursor:pointer;display:flex;flex-direction:column;align-items:center;border:1px solid transparent;transition:all .12s;user-select:none}
 .dc:hover:not(.dc-empty){background:var(--surface2)}
 .dc-empty{cursor:default}
 .dc-dad{background:var(--dad-bg);border-color:var(--dad-border)}
@@ -239,12 +267,11 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .dc-dad .dc-num{color:var(--dad-text)}
 .dc-mom .dc-num{color:var(--mom-text)}
 .dc-empty .dc-num{color:var(--border2)}
-.dc-indicators{display:flex;gap:2px;margin-top:3px;justify-content:center;flex-wrap:wrap}
+.dc-indicators{display:flex;gap:2px;margin-top:3px;justify-content:center}
 .dind{width:5px;height:5px;border-radius:50%}
 .dind-actual-dad{background:var(--dad)}
 .dind-actual-mom{background:var(--mom)}
 .dind-swap{background:var(--green)}
-
 .cal-stats{display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;margin-top:14px}
 .cal-stat{background:var(--surface);border:1px solid var(--border);border-radius:10px;padding:10px;text-align:center}
 .cal-stat-num{font-family:'Fraunces',serif;font-size:20px;font-weight:300}
@@ -252,11 +279,10 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .cal-stat-num.mom{color:var(--mom)}
 .cal-stat-num.swap{color:var(--green)}
 .cal-stat-label{font-size:10px;color:var(--text3);margin-top:2px}
-
 .day-detail{background:var(--surface);border:1px solid var(--border);border-radius:12px;margin-top:12px;overflow:hidden}
 .day-detail-header{padding:12px 14px;border-bottom:1px solid var(--border);display:flex;justify-content:space-between;align-items:center}
 .day-detail-title{font-family:'Fraunces',serif;font-size:15px;font-weight:300;color:var(--text)}
-.day-detail-close{background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px}
+.day-detail-close{background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer}
 .day-detail-body{padding:12px 14px;display:flex;flex-direction:column;gap:8px}
 .detail-row{display:flex;justify-content:space-between;align-items:center;font-size:13px;padding:5px 0;border-bottom:1px solid var(--border)}
 .detail-row:last-of-type{border-bottom:none}
@@ -274,15 +300,14 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 /* ── SWAP ── */
 .swap-view{display:flex;flex-direction:column;gap:14px}
 .swap-pending-card{background:var(--green-bg);border:1px solid var(--green-border);border-radius:14px;padding:18px}
-.swap-pending-title{font-family:'Fraunces',serif;font-size:15px;font-weight:300;color:var(--green);margin-bottom:14px;display:flex;align-items:center;gap:8px}
+.swap-pending-title{font-family:'Fraunces',serif;font-size:15px;font-weight:300;color:var(--green);margin-bottom:14px}
 .swap-days-display{display:grid;grid-template-columns:1fr auto 1fr;gap:10px;align-items:center;margin-bottom:16px}
 .swap-day-box{background:var(--surface);border:1px solid var(--green-border);border-radius:10px;padding:12px;text-align:center}
-.swap-day-box .sdb-who{font-size:11px;color:#5a8a40;margin-bottom:4px}
-.swap-day-box .sdb-day{font-size:13px;font-weight:500;color:var(--green);line-height:1.4}
+.sdb-who{font-size:11px;color:#5a8a40;margin-bottom:4px}
+.sdb-day{font-size:13px;font-weight:500;color:var(--green);line-height:1.4}
 .swap-arrow{font-size:20px;color:#5a8a40;text-align:center}
 .swap-action-btns{display:grid;grid-template-columns:1fr 1fr;gap:8px}
-.swap-approve-btn{background:var(--green);border:none;color:#fff;border-radius:10px;padding:12px;cursor:pointer;font-size:13px;font-weight:500;font-family:'DM Sans',sans-serif;transition:filter .2s}
-.swap-approve-btn:hover{filter:brightness(1.1)}
+.swap-approve-btn{background:var(--green);border:none;color:#fff;border-radius:10px;padding:12px;cursor:pointer;font-size:13px;font-weight:500;font-family:'DM Sans',sans-serif}
 .swap-reject-btn{background:var(--red-bg);border:1px solid var(--red-border);color:var(--red);border-radius:10px;padding:12px;cursor:pointer;font-size:13px;font-weight:500;font-family:'DM Sans',sans-serif}
 .swap-cancel-btn{background:var(--surface2);border:1px solid var(--border);color:var(--text2);border-radius:10px;padding:10px;cursor:pointer;font-size:12px;font-family:'DM Sans',sans-serif;width:100%;margin-top:8px}
 .swap-sent-card{background:var(--dad-bg);border:1px solid var(--dad-border);border-radius:14px;padding:18px}
@@ -300,19 +325,17 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .day-item:hover{background:var(--surface2)}
 .day-item.selected{border-color:var(--dad);background:var(--dad-bg)}
 .day-item.selected.mom-sel{border-color:var(--mom);background:var(--mom-bg)}
-.day-item .di-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
-.day-item .di-dot.dad{background:var(--dad)}
-.day-item .di-dot.mom{background:var(--mom)}
-.day-item .di-label{font-size:13px;color:var(--text)}
-.day-item .di-owner{font-size:11px;margin-right:auto}
-.day-item .di-owner.dad{color:var(--dad)}
-.day-item .di-owner.mom{color:var(--mom)}
+.di-dot{width:7px;height:7px;border-radius:50%;flex-shrink:0}
+.di-dot.dad{background:var(--dad)}
+.di-dot.mom{background:var(--mom)}
+.di-label{font-size:13px;color:var(--text)}
+.di-owner{font-size:11px;margin-right:auto}
+.di-owner.dad{color:var(--dad)}
+.di-owner.mom{color:var(--mom)}
 .send-swap-btn{background:var(--dad);border:none;color:#fff;border-radius:10px;padding:13px;cursor:pointer;font-size:14px;font-weight:500;font-family:'DM Sans',sans-serif;width:100%;margin-top:14px}
 .send-swap-btn:disabled{background:var(--border2);color:var(--surface);cursor:default}
-.whatsapp-btn{background:#25d366;border:none;color:#fff;border-radius:10px;padding:13px;cursor:pointer;font-size:14px;font-weight:500;font-family:'DM Sans',sans-serif;width:100%;margin-top:8px;display:flex;align-items:center;justify-content:center;gap:8px;transition:filter .15s}
-.whatsapp-btn:hover{filter:brightness(1.08)}
-.whatsapp-btn:disabled{background:var(--border2);color:var(--surface);cursor:default}
-.whatsapp-icon{font-size:18px}
+.whatsapp-btn{background:#25d366;border:none;color:#fff;border-radius:10px;padding:13px;cursor:pointer;font-size:14px;font-weight:500;font-family:'DM Sans',sans-serif;width:100%;margin-top:8px;display:flex;align-items:center;justify-content:center;gap:8px}
+.whatsapp-btn:disabled{background:var(--border2);cursor:default}
 .swap-log-section{margin-top:24px}
 .swap-log-title{font-size:12px;letter-spacing:1.5px;text-transform:uppercase;color:var(--text3);margin-bottom:10px}
 .swap-log-list{display:flex;flex-direction:column;gap:7px}
@@ -331,112 +354,72 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 @keyframes fadeup{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
 `;
 
-// ── Calendar Component ─────────────────────────────────────────────────────────
+// ── Calendar Component ────────────────────────────────────────────────────────
 function Calendar({ schedule, liveLog, swapLog }) {
   const today = new Date();
   const [curYear, setCurYear] = useState(today.getFullYear());
   const [curMonth, setCurMonth] = useState(today.getMonth());
   const [selectedDay, setSelectedDay] = useState(null);
-  const [notes, setNotes] = useState(() => {
-    try { return JSON.parse(localStorage.getItem("cp_notes") || "{}"); } catch { return {}; }
-  });
   const [noteInput, setNoteInput] = useState("");
   const [noteSaved, setNoteSaved] = useState(false);
+  const [notes, setNotes] = useState(() => { try { return JSON.parse(localStorage.getItem("tg_notes") || "{}"); } catch { return {}; } });
 
   const changeMonth = (dir) => {
     let m = curMonth + dir, y = curYear;
-    if (m < 0) { m = 11; y--; }
-    if (m > 11) { m = 0; y++; }
+    if (m < 0) { m = 11; y--; } if (m > 11) { m = 0; y++; }
     setCurMonth(m); setCurYear(y); setSelectedDay(null);
   };
 
   const logByDate = {};
-  (liveLog || []).forEach(e => {
-    if (e.parent === "system") return;
-    const d = e.timestamp.slice(0, 10);
-    if (!logByDate[d]) logByDate[d] = e;
-  });
-
+  (liveLog || []).forEach(e => { if (e.parent !== "system") { const d = e.timestamp.slice(0, 10); if (!logByDate[d]) logByDate[d] = e; } });
   const swapByDate = {};
   (swapLog || []).filter(s => s.status === "approved").forEach(s => {
-    if (s.offerDay?.date) swapByDate[s.offerDay.date] = s;
-    if (s.wantDay?.date) swapByDate[s.wantDay.date] = s;
+    if (s.offerDay?.date) swapByDate[s.offerDay.date] = true;
+    if (s.wantDay?.date) swapByDate[s.wantDay.date] = true;
   });
 
   const firstDow = new Date(curYear, curMonth, 1).getDay();
   const daysInMonth = new Date(curYear, curMonth + 1, 0).getDate();
   const todayStr = toDateStr(today);
-
   let dadCount = 0, momCount = 0, swapCount = 0;
   const cells = [];
   for (let i = 0; i < firstDow; i++) cells.push(null);
   for (let d = 1; d <= daysInMonth; d++) {
-    const dt = new Date(curYear, curMonth, d);
-    const dateStr = toDateStr(dt);
-    const owner = getScheduledOwner(dt, schedule);
-    const actual = logByDate[dateStr];
-    const swapped = swapByDate[dateStr];
-    if (owner === "dad") dadCount++;
-    if (owner === "mom") momCount++;
-    if (swapped) swapCount++;
+    const dt = new Date(curYear, curMonth, d), dateStr = toDateStr(dt);
+    const owner = getScheduledOwner(dt, schedule), actual = logByDate[dateStr], swapped = swapByDate[dateStr];
+    if (owner === "dad") dadCount++; if (owner === "mom") momCount++; if (swapped) swapCount++;
     cells.push({ d, dateStr, owner, actual, swapped, dt });
   }
 
-  const handleDayClick = (cell) => {
-    if (selectedDay?.dateStr === cell.dateStr) { setSelectedDay(null); return; }
-    setSelectedDay(cell);
-    setNoteInput(notes[cell.dateStr] || "");
-    setNoteSaved(false);
-  };
-
   const saveNote = () => {
     const updated = { ...notes, [selectedDay.dateStr]: noteInput };
-    setNotes(updated);
-    localStorage.setItem("cp_notes", JSON.stringify(updated));
-    setNoteSaved(true);
+    setNotes(updated); localStorage.setItem("tg_notes", JSON.stringify(updated)); setNoteSaved(true);
   };
 
   return (
-    <div className="cal-container">
+    <div>
       <div className="cal-nav-row">
-        <div>
-          <div className="cal-month-title">{MONTHS_HE[curMonth]}</div>
-          <div className="cal-year-sub">{curYear}</div>
-        </div>
+        <div><div className="cal-month-title">{MONTHS_HE[curMonth]}</div><div className="cal-year-sub">{curYear}</div></div>
         <div style={{ display: "flex", gap: 8 }}>
           <button className="cal-arrow" onClick={() => changeMonth(-1)}>›</button>
           <button className="cal-arrow" onClick={() => changeMonth(1)}>‹</button>
         </div>
       </div>
-
       <div className="cal-legend">
         <div className="cal-leg"><div className="cal-leg-dot" style={{ background: "var(--dad)" }} /> אבא</div>
         <div className="cal-leg"><div className="cal-leg-dot" style={{ background: "var(--mom)" }} /> אמא</div>
         <div className="cal-leg"><div className="cal-leg-dot" style={{ background: "var(--dad)", width: 14, height: 4, borderRadius: 2 }} /> סימון בפועל</div>
         <div className="cal-leg"><div className="cal-leg-dot" style={{ background: "var(--green)" }} /> החלפה</div>
       </div>
-
-      <div className="dow-row">
-        {["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"].map(d => (
-          <div key={d} className="dow-cell">{d}</div>
-        ))}
-      </div>
-
+      <div className="dow-row">{["א׳","ב׳","ג׳","ד׳","ה׳","ו׳","ש׳"].map(d => <div key={d} className="dow-cell">{d}</div>)}</div>
       <div className="cal-grid">
         {cells.map((cell, i) => {
           if (!cell) return <div key={"e"+i} className="dc dc-empty" />;
           const { d, dateStr, owner, actual, swapped, dt } = cell;
-          const isPast = dt < today && dateStr !== todayStr;
-          const isToday = dateStr === todayStr;
-          const isSelected = selectedDay?.dateStr === dateStr;
-          const cls = ["dc",
-            owner === "dad" ? "dc-dad" : owner === "mom" ? "dc-mom" : "",
-            isPast ? "dc-past" : "",
-            isToday ? "dc-today" : "",
-            isSelected ? "dc-selected" : "",
-          ].filter(Boolean).join(" ");
+          const isPast = dt < today && dateStr !== todayStr, isToday = dateStr === todayStr, isSelected = selectedDay?.dateStr === dateStr;
+          const cls = ["dc", owner === "dad" ? "dc-dad" : owner === "mom" ? "dc-mom" : "", isPast ? "dc-past" : "", isToday ? "dc-today" : "", isSelected ? "dc-selected" : ""].filter(Boolean).join(" ");
           return (
-            <div key={dateStr} className={cls} onClick={() => handleDayClick(cell)}>
+            <div key={dateStr} className={cls} onClick={() => { if (isSelected) { setSelectedDay(null); return; } setSelectedDay(cell); setNoteInput(notes[dateStr] || ""); setNoteSaved(false); }}>
               <div className="dc-num">{d}</div>
               <div className="dc-indicators">
                 {actual && <div className={`dind dind-actual-${actual.parent}`} />}
@@ -446,52 +429,25 @@ function Calendar({ schedule, liveLog, swapLog }) {
           );
         })}
       </div>
-
       {selectedDay && (
         <div className="day-detail">
           <div className="day-detail-header">
-            <div className="day-detail-title">
-              {DAYS_HE[selectedDay.dt.getDay()]} {selectedDay.d} ב{MONTHS_HE[curMonth]}
-            </div>
+            <div className="day-detail-title">{DAYS_HE[selectedDay.dt.getDay()]} {selectedDay.d} ב{MONTHS_HE[curMonth]}</div>
             <button className="day-detail-close" onClick={() => setSelectedDay(null)}>✕</button>
           </div>
           <div className="day-detail-body">
-            <div className="detail-row">
-              <span className="detail-label">לפי הסדר</span>
-              <span className={`detail-val ${selectedDay.owner || "none"}`}>
-                {selectedDay.owner === "dad" ? "👨 אבא" : selectedDay.owner === "mom" ? "👩 אמא" : "לא מוגדר"}
-              </span>
-            </div>
-            <div className="detail-row">
-              <span className="detail-label">סימון בפועל</span>
-              <span className={`detail-val ${selectedDay.actual ? selectedDay.actual.parent : "none"}`}>
-                {selectedDay.actual
-                  ? `${selectedDay.actual.parent === "dad" ? "👨 אבא" : "👩 אמא"} · ${new Date(selectedDay.actual.timestamp).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}`
-                  : "לא סומן"}
-              </span>
-            </div>
-            {selectedDay.swapped && (
-              <div className="detail-row">
-                <span className="detail-label">החלפה</span>
-                <span className="detail-val swap">✅ הוחלף</span>
-              </div>
-            )}
+            <div className="detail-row"><span className="detail-label">לפי הסדר</span><span className={`detail-val ${selectedDay.owner || "none"}`}>{selectedDay.owner === "dad" ? "👨 אבא" : selectedDay.owner === "mom" ? "👩 אמא" : "לא מוגדר"}</span></div>
+            <div className="detail-row"><span className="detail-label">סימון בפועל</span><span className={`detail-val ${selectedDay.actual ? selectedDay.actual.parent : "none"}`}>{selectedDay.actual ? `${selectedDay.actual.parent === "dad" ? "👨 אבא" : "👩 אמא"} · ${new Date(selectedDay.actual.timestamp).toLocaleTimeString("he-IL", { hour: "2-digit", minute: "2-digit" })}` : "לא סומן"}</span></div>
+            {selectedDay.swapped && <div className="detail-row"><span className="detail-label">החלפה</span><span className="detail-val swap">✅ הוחלף</span></div>}
             <div>
               <div className="detail-label" style={{ fontSize: 12, marginBottom: 5 }}>הערה</div>
-              <textarea
-                className="detail-note-input"
-                rows={2}
-                placeholder="הוסף הערה ליום זה..."
-                value={noteInput}
-                onChange={e => { setNoteInput(e.target.value); setNoteSaved(false); }}
-              />
+              <textarea className="detail-note-input" rows={2} placeholder="הוסף הערה ליום זה..." value={noteInput} onChange={e => { setNoteInput(e.target.value); setNoteSaved(false); }} />
               <button className="detail-save-note" onClick={saveNote}>שמור</button>
-              {noteSaved && <div className="detail-saved">✓ הערה נשמרה</div>}
+              {noteSaved && <div className="detail-saved">✓ נשמר</div>}
             </div>
           </div>
         </div>
       )}
-
       <div className="cal-stats">
         <div className="cal-stat"><div className="cal-stat-num dad">{dadCount}</div><div className="cal-stat-label">ימי אבא</div></div>
         <div className="cal-stat"><div className="cal-stat-num mom">{momCount}</div><div className="cal-stat-label">ימי אמא</div></div>
@@ -501,8 +457,170 @@ function Calendar({ schedule, liveLog, swapLog }) {
   );
 }
 
-// ── App ───────────────────────────────────────────────────────────────────────
+// ── Admin Panel ───────────────────────────────────────────────────────────────
+function AdminPanel({ onLogout }) {
+  const [adminPwd] = useState(() => localStorage.getItem("tg_admin_pwd") || "");
+  const [families, setFamilies] = useState([]);
+  const [newName, setNewName] = useState("");
+  const [newPwd, setNewPwd] = useState("");
+  const [error, setError] = useState(null);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const data = await adminFetch("/api/admin/families", {}, adminPwd);
+      setFamilies(data);
+    } catch (e) { setError(e.message); }
+  }, [adminPwd]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const addFamily = async () => {
+    if (!newName || !newPwd) return;
+    setSaving(true); setError(null);
+    try {
+      await adminFetch("/api/admin/families", { method: "POST", body: JSON.stringify({ name: newName, password: newPwd }) }, adminPwd);
+      setNewName(""); setNewPwd(""); load();
+    } catch (e) { setError(e.message); }
+    finally { setSaving(false); }
+  };
+
+  const deleteFamily = async (id, name) => {
+    if (!window.confirm(`למחוק את משפחת ${name}?`)) return;
+    try { await adminFetch(`/api/admin/families/${id}`, { method: "DELETE" }, adminPwd); load(); }
+    catch (e) { setError(e.message); }
+  };
+
+  const resetPwd = async (id) => {
+    const pwd = window.prompt("סיסמה חדשה:");
+    if (!pwd) return;
+    try { await adminFetch(`/api/admin/families/${id}/password`, { method: "PUT", body: JSON.stringify({ password: pwd }) }, adminPwd); alert("סיסמה עודכנה ✓"); }
+    catch (e) { setError(e.message); }
+  };
+
+  return (
+    <div className="admin-wrap">
+      <div className="admin-header">
+        <div className="admin-title">🛡️ Togather — פנל ניהול</div>
+        <button className="admin-logout" onClick={onLogout}>יציאה</button>
+      </div>
+      <div className="admin-body">
+        {error && <div className="error-msg" style={{ marginBottom: 16 }}>{error}</div>}
+        <div className="admin-section-title">הוסף משפחה חדשה</div>
+        <div className="add-family-card">
+          <div className="add-row">
+            <div className="field" style={{ margin: 0 }}>
+              <label>שם משפחה</label>
+              <input value={newName} onChange={e => setNewName(e.target.value)} placeholder="כהן" />
+            </div>
+            <div className="field" style={{ margin: 0 }}>
+              <label>סיסמה</label>
+              <input type="password" value={newPwd} onChange={e => setNewPwd(e.target.value)} placeholder="••••••" />
+            </div>
+          </div>
+          <button className="add-btn" onClick={addFamily} disabled={saving || !newName || !newPwd}>
+            {saving ? "שומר..." : "+ הוסף משפחה"}
+          </button>
+        </div>
+
+        <div className="admin-section-title">משפחות רשומות ({families.length})</div>
+        {families.length === 0 && <div className="empty-families">אין משפחות עדיין</div>}
+        <div className="families-list">
+          {families.map(f => (
+            <div key={f.id} className="family-card">
+              <div className="family-icon">👨‍👩‍👧</div>
+              <div className="family-info">
+                <div className="family-name">משפחת {f.name}</div>
+                <div className="family-meta">
+                  נוצר: {new Date(f.createdAt).toLocaleDateString("he-IL")}
+                  {f.lastActive && ` · פעיל לאחרונה: ${new Date(f.lastActive).toLocaleDateString("he-IL")}`}
+                </div>
+              </div>
+              <div className="family-actions">
+                <button className="fam-btn" onClick={() => resetPwd(f.id)}>🔑 איפוס</button>
+                <button className="fam-btn del" onClick={() => deleteFamily(f.id, f.name)}>🗑️</button>
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ── Login Screen ──────────────────────────────────────────────────────────────
+function LoginScreen({ onLogin, onAdminLogin }) {
+  const [name, setName] = useState("");
+  const [password, setPassword] = useState("");
+  const [error, setError] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [showAdmin, setShowAdmin] = useState(false);
+  const [adminPwd, setAdminPwd] = useState("");
+
+  const handleLogin = async () => {
+    setLoading(true); setError(null);
+    try {
+      const res = await apiFetch("/api/family/login", { method: "POST", body: JSON.stringify({ name, password }) });
+      onLogin({ familyId: res.familyId, familyName: res.familyName, password });
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  const handleAdminLogin = async () => {
+    setLoading(true); setError(null);
+    try {
+      await apiFetch("/api/admin/login", { method: "POST", body: JSON.stringify({ password: adminPwd }) });
+      localStorage.setItem("tg_admin_pwd", adminPwd);
+      onAdminLogin(adminPwd);
+    } catch (e) { setError(e.message); }
+    finally { setLoading(false); }
+  };
+
+  return (
+    <div className="login-wrap">
+      <div className="login-logo">👨‍👩‍👧</div>
+      <div className="login-title">Togather</div>
+      <div className="login-sub">יומן הורות משותפת</div>
+
+      {!showAdmin ? (
+        <div className="login-card">
+          <div className="login-card-title">כניסה למשפחה</div>
+          {error && <div className="login-err">{error}</div>}
+          <div className="field">
+            <label>שם משפחה</label>
+            <input value={name} onChange={e => setName(e.target.value)} placeholder="כהן" onKeyDown={e => e.key === "Enter" && handleLogin()} />
+          </div>
+          <div className="field">
+            <label>סיסמה</label>
+            <input type="password" value={password} onChange={e => setPassword(e.target.value)} placeholder="••••••" onKeyDown={e => e.key === "Enter" && handleLogin()} />
+          </div>
+          <button className="login-btn" onClick={handleLogin} disabled={loading || !name || !password}>
+            {loading ? "מתחבר..." : "כניסה →"}
+          </button>
+          <div className="admin-link" onClick={() => { setShowAdmin(true); setError(null); }}>כניסת מנהל</div>
+        </div>
+      ) : (
+        <div className="login-card">
+          <div className="login-card-title">🛡️ כניסת מנהל</div>
+          {error && <div className="login-err">{error}</div>}
+          <div className="field">
+            <label>סיסמת מנהל</label>
+            <input type="password" value={adminPwd} onChange={e => setAdminPwd(e.target.value)} placeholder="••••••" onKeyDown={e => e.key === "Enter" && handleAdminLogin()} />
+          </div>
+          <button className="login-btn" onClick={handleAdminLogin} disabled={loading || !adminPwd}>
+            {loading ? "מתחבר..." : "כניסה →"}
+          </button>
+          <div className="admin-link" onClick={() => { setShowAdmin(false); setError(null); }}>← חזרה</div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Main App ──────────────────────────────────────────────────────────────────
 export default function App() {
+  const [session, setSession] = useState(() => getSession());
+  const [isAdmin, setIsAdmin] = useState(false);
   const [view, setView] = useState("home");
   const [role, setRole] = useState(() => localStorage.getItem(ROLE_KEY) || null);
   const [data, setData] = useState(null);
@@ -518,47 +636,43 @@ export default function App() {
   const [offerDay, setOfferDay] = useState(null);
   const [wantDay, setWantDay] = useState(null);
 
+  const handleLogin = (s) => { saveSession(s); setSession(s); setIsAdmin(false); };
+  const handleAdminLogin = () => { setIsAdmin(true); setSession(null); };
+  const handleLogout = () => { clearSession(); setSession(null); setIsAdmin(false); setData(null); setView("home"); };
+
   const loadData = useCallback(async () => {
+    if (!session) return;
     try {
       setError(null);
-      const d = await apiFetch("/api/data");
+      const d = await apiFetch("/api/family/data", {}, session);
       setData(d);
-    } catch (e) { setError("שגיאה בטעינה: " + e.message); }
+    } catch (e) { setError(e.message); }
     finally { setLoading(false); }
-  }, []);
+  }, [session]);
 
-  useEffect(() => { loadData(); }, [loadData]);
-  useEffect(() => { const id = setInterval(loadData, 15000); return () => clearInterval(id); }, [loadData]);
+  useEffect(() => { if (session) { setLoading(true); loadData(); } }, [session, loadData]);
+  useEffect(() => { if (!session) return; const id = setInterval(loadData, 15000); return () => clearInterval(id); }, [session, loadData]);
 
-  const showToast = (msg, type = "ok") => {
-    setToast({ msg, type });
-    setTimeout(() => setToast(null), 2800);
-  };
-
+  const showToast = (msg, type = "ok") => { setToast({ msg, type }); setTimeout(() => setToast(null), 2800); };
   const saveRole = (r) => { setRole(r); localStorage.setItem(ROLE_KEY, r); };
 
-  const todayScheduled = useCallback(() => {
-    if (!data?.schedule) return null;
-    return getScheduledOwner(new Date(), data.schedule);
-  }, [data]);
+  const todayScheduled = useCallback(() => data?.schedule ? getScheduledOwner(new Date(), data.schedule) : null, [data]);
 
   const handleMark = async () => {
-    if (!role || saving) return;
+    if (!role || saving || !session) return;
     setSaving(true);
     try {
-      const res = await apiFetch("/api/mark", { method: "POST", body: JSON.stringify({ parent: role }) });
+      const res = await apiFetch("/api/family/mark", { method: "POST", body: JSON.stringify({ parent: role }) }, session);
       setData(prev => ({ ...prev, currentWith: res.currentWith, liveLog: [res.entry, ...prev.liveLog] }));
       showToast(`✓ ${role === "dad" ? "אבא" : "אמא"} סימן/ה בהצלחה`, role);
-    } catch (e) { setError("שגיאה: " + e.message); }
+    } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   };
 
   const startEdit = () => {
     const s = data?.schedule;
     setTmpFixed({ dad: [...(s?.fixed?.dad || [])], mom: [...(s?.fixed?.mom || [])] });
-    setTmpRot([...(s?.rotating?.days || [])]);
-    setTmpRotDad(s?.rotating?.currentWeekDad ?? true);
-    setEditSchedule(true);
+    setTmpRot([...(s?.rotating?.days || [])]); setTmpRotDad(s?.rotating?.currentWeekDad ?? true); setEditSchedule(true);
   };
   const toggleFixed = (day, parent) => {
     const other = parent === "dad" ? "mom" : "dad";
@@ -576,16 +690,14 @@ export default function App() {
     const schedule = { fixed: tmpFixed, rotating: { days: tmpRot, currentWeekDad: tmpRotDad } };
     setSaving(true);
     try {
-      const res = await apiFetch("/api/schedule", { method: "PUT", body: JSON.stringify({ schedule }) });
-      setData(prev => ({ ...prev, schedule: res.schedule }));
-      setEditSchedule(false);
-      showToast("✓ הסדר נשמר", "ok");
-    } catch (e) { setError("שגיאה: " + e.message); }
+      const res = await apiFetch("/api/family/schedule", { method: "PUT", body: JSON.stringify({ schedule }) }, session);
+      setData(prev => ({ ...prev, schedule: res.schedule })); setEditSchedule(false); showToast("✓ הסדר נשמר", "ok");
+    } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   };
   const clearLog = async () => {
     if (!window.confirm("למחוק את כל ההיסטוריה?")) return;
-    await apiFetch("/api/log", { method: "DELETE" });
+    await apiFetch("/api/family/log", { method: "DELETE" }, session);
     setData(prev => ({ ...prev, liveLog: [], currentWith: null }));
   };
 
@@ -593,43 +705,34 @@ export default function App() {
     if (!offerDay || !wantDay || !role || saving) return;
     setSaving(true);
     try {
-      const res = await apiFetch("/api/swap", { method: "POST", body: JSON.stringify({ requestedBy: role, offerDay, wantDay }) });
+      const res = await apiFetch("/api/family/swap", { method: "POST", body: JSON.stringify({ requestedBy: role, offerDay, wantDay }) }, session);
       setData(prev => ({ ...prev, swapRequest: res.swapRequest }));
-      setOfferDay(null); setWantDay(null); setSwapStep(1);
-      showToast("✓ בקשת החלפה נשלחה!", "ok");
-    } catch (e) { showToast("שגיאה: " + e.message, "err"); }
+      setOfferDay(null); setWantDay(null); setSwapStep(1); showToast("✓ בקשת החלפה נשלחה!", "ok");
+    } catch (e) { showToast(e.message, "err"); }
     finally { setSaving(false); }
   };
   const respondSwap = async (action) => {
     if (!role || saving) return;
     setSaving(true);
     try {
-      await apiFetch("/api/swap/respond", { method: "PUT", body: JSON.stringify({ respondedBy: role, action }) });
-      await loadData();
-      showToast(action === "approve" ? "✓ אישרת את ההחלפה!" : "בקשה נדחתה", action === "approve" ? "ok" : "err");
-    } catch (e) { showToast("שגיאה: " + e.message, "err"); }
+      await apiFetch("/api/family/swap/respond", { method: "PUT", body: JSON.stringify({ respondedBy: role, action }) }, session);
+      await loadData(); showToast(action === "approve" ? "✓ אישרת את ההחלפה!" : "בקשה נדחתה", action === "approve" ? "ok" : "err");
+    } catch (e) { showToast(e.message, "err"); }
     finally { setSaving(false); }
   };
   const cancelSwap = async () => {
     if (!role || saving) return;
     setSaving(true);
     try {
-      await apiFetch("/api/swap", { method: "DELETE", body: JSON.stringify({ cancelledBy: role }) });
-      await loadData();
-      showToast("הבקשה בוטלה", "err");
-    } catch (e) { showToast("שגיאה: " + e.message, "err"); }
+      await apiFetch("/api/family/swap", { method: "DELETE", body: JSON.stringify({ cancelledBy: role }) }, session);
+      await loadData(); showToast("הבקשה בוטלה", "err");
+    } catch (e) { showToast(e.message, "err"); }
     finally { setSaving(false); }
   };
-
   const sendWhatsApp = (offer, want) => {
     const selfName = role === "dad" ? "אבא" : "אמא";
-    const msg =
-      `שלום! ${selfName} מבקש/ת החלפת יום 🔄\n\n` +
-      `📅 אני נותן/ת: *${offer.label}*\n` +
-      `📅 אני רוצה: *${want.label}*\n\n` +
-      `לאישור או דחייה — פתח/י את היומן המשותף:\n${APP_URL}`;
-    const encoded = encodeURIComponent(msg);
-    window.open(`https://wa.me/?text=${encoded}`, "_blank");
+    const msg = `שלום! ${selfName} מבקש/ת החלפת יום 🔄\n\n📅 אני נותן/ת: *${offer.label}*\n📅 אני רוצה: *${want.label}*\n\nלאישור או דחייה:\n${APP_URL}`;
+    window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
   };
 
   const scheduled = todayScheduled();
@@ -641,20 +744,12 @@ export default function App() {
   const hasPendingSwap = swap?.status === "pending";
   const isSwapRequester = swap?.requestedBy === role;
   const canRespondToSwap = hasPendingSwap && !isSwapRequester;
+  const getDayLabel = (dow) => { if (!sched) return null; if (sched.fixed.dad.includes(dow)) return "dad"; if (sched.fixed.mom.includes(dow)) return "mom"; if (sched.rotating.days.includes(dow)) return "rotating"; return null; };
+  const getTmpLabel = (dow) => { if (tmpFixed.dad.includes(dow)) return "dad"; if (tmpFixed.mom.includes(dow)) return "mom"; if (tmpRot.includes(dow)) return "rot"; return null; };
 
-  const getDayLabel = (dow) => {
-    if (!sched) return null;
-    if (sched.fixed.dad.includes(dow)) return "dad";
-    if (sched.fixed.mom.includes(dow)) return "mom";
-    if (sched.rotating.days.includes(dow)) return "rotating";
-    return null;
-  };
-  const getTmpLabel = (dow) => {
-    if (tmpFixed.dad.includes(dow)) return "dad";
-    if (tmpFixed.mom.includes(dow)) return "mom";
-    if (tmpRot.includes(dow)) return "rot";
-    return null;
-  };
+  // ── Render ────────────────────────────────────────────────────────────────
+  if (isAdmin) return <><style>{CSS}</style><AdminPanel onLogout={handleLogout} /></>;
+  if (!session) return <><style>{CSS}</style><div className="app"><LoginScreen onLogin={handleLogin} onAdminLogin={handleAdminLogin} /></div></>;
 
   return (
     <>
@@ -662,13 +757,12 @@ export default function App() {
       {toast && <div className={`toast ${toast.type}`}>{toast.msg}</div>}
       <div className="app">
 
-        {/* ═══ HOME ═══ */}
         {view === "home" && (
           <div className="home">
             <div className="home-header">
               <span className="home-icon">👨‍👩‍👧</span>
               <div className="home-title">Togather</div>
-              <div className="home-sub">יומן הורות משותפת</div>
+              <div className="home-family">משפחת {session.familyName}</div>
             </div>
             <div className="section-label">אני הורה:</div>
             <div className="role-btns">
@@ -683,8 +777,7 @@ export default function App() {
                 <div className={`today-dot ${scheduled || "none"}`} />
                 <div className="today-text">
                   היום ({DAYS_HE[new Date().getDay()]}):{" "}
-                  {scheduled ? <span className={`cp ${scheduled}`}>{scheduled === "dad" ? "👨 אבא" : "👩 אמא"}</span>
-                    : <span style={{ color: "var(--text3)" }}>לא מוגדר</span>}
+                  {scheduled ? <span className={`cp ${scheduled}`}>{scheduled === "dad" ? "👨 אבא" : "👩 אמא"}</span> : <span style={{ color: "var(--text3)" }}>לא מוגדר</span>}
                   {data.currentWith && <><br />בפועל: <span className={`cp ${data.currentWith}`}>{data.currentWith === "dad" ? "👨 אבא" : "👩 אמא"}</span></>}
                 </div>
               </div>
@@ -706,20 +799,16 @@ export default function App() {
               <button className="nav-btn" onClick={() => setView("log")}><span className="ni">📋</span>יומן חי</button>
               <button className="nav-btn hl" onClick={() => setView("calendar")}><span className="ni">📅</span>לוח שנה</button>
               <button className="nav-btn" onClick={() => { setEditSchedule(false); setView("schedule"); }}><span className="ni">⚙️</span>סדר קבוע</button>
-              <button
-                className="nav-btn"
-                style={{ gridColumn: "span 2", position: "relative", background: hasPendingSwap && canRespondToSwap ? "var(--green-bg)" : "var(--surface)", borderColor: hasPendingSwap && canRespondToSwap ? "var(--green-border)" : "var(--border)", color: hasPendingSwap && canRespondToSwap ? "var(--green)" : "var(--text2)" }}
-                onClick={() => setView("swap")}
-              >
-                {hasPendingSwap && canRespondToSwap && <span className="nav-badge">!</span>}
+              <button className="nav-btn" style={{ gridColumn: "span 2", position: "relative", background: canRespondToSwap ? "var(--green-bg)" : "var(--surface)", borderColor: canRespondToSwap ? "var(--green-border)" : "var(--border)", color: canRespondToSwap ? "var(--green)" : "var(--text2)" }} onClick={() => setView("swap")}>
+                {canRespondToSwap && <span className="nav-badge">!</span>}
                 <span className="ni">🔄</span>
-                {hasPendingSwap && canRespondToSwap ? "בקשת החלפה — ממתינה לאישורך!" : hasPendingSwap && isSwapRequester ? "⏳ בקשת החלפה — ממתינה לאישור" : "בקשת החלפת יום"}
+                {canRespondToSwap ? "בקשת החלפה — ממתינה לאישורך!" : hasPendingSwap && isSwapRequester ? "⏳ ממתינה לאישור" : "בקשת החלפת יום"}
               </button>
             </div>
+            <button className="logout-btn" onClick={handleLogout}>יציאה מהחשבון</button>
           </div>
         )}
 
-        {/* ═══ LIVE ═══ */}
         {view === "live" && (
           <div className="view">
             <div className="vheader"><button className="back-btn" onClick={() => setView("home")}>← חזרה</button><div className="vtitle">סימון מיקום</div></div>
@@ -727,26 +816,20 @@ export default function App() {
               {error && <div className="error-msg">{error}</div>}
               <div className="live-hero">
                 <div className="live-status-label">כרגע הילד/ים אצל:</div>
-                <div className={`live-current ${data?.currentWith || ""}`}>
-                  {data?.currentWith === "dad" ? "👨 אבא" : data?.currentWith === "mom" ? "👩 אמא" : "—"}
-                </div>
+                <div className={`live-current ${data?.currentWith || ""}`}>{data?.currentWith === "dad" ? "👨 אבא" : data?.currentWith === "mom" ? "👩 אמא" : "—"}</div>
                 <div className="mark-wrap">
-                  <button
-                    className={`mark-btn ${role === "mom" ? "mom-btn" : ""} ${!role || saving ? "disabled" : ""}`}
-                    onClick={handleMark} disabled={!role || saving}
-                  >
+                  <button className={`mark-btn ${role === "mom" ? "mom-btn" : ""} ${!role || saving ? "disabled" : ""}`} onClick={handleMark} disabled={!role || saving}>
                     <span className="me">{role === "dad" ? "👨" : role === "mom" ? "👩" : "❓"}</span>
                     {saving ? "שומר..." : role ? "הילד/ים אצלי!" : "בחר תפקיד"}
                   </button>
                 </div>
-                <div className="hint">{!role ? "חזור לדף הבית ובחר תפקיד" : "לחץ/י כשהילד/ים מגיעים אלייך"}</div>
+                <div className="hint">{!role ? "חזור ובחר תפקיד" : "לחץ/י כשהילד/ים מגיעים אלייך"}</div>
               </div>
-              <div className="sync-badge">🔄 מתעדכן כל 15 שניות · נתונים משותפים</div>
+              <div className="sync-badge">🔄 מתעדכן כל 15 שניות</div>
             </div>
           </div>
         )}
 
-        {/* ═══ LOG ═══ */}
         {view === "log" && (
           <div className="view">
             <div className="vheader"><button className="back-btn" onClick={() => setView("home")}>← חזרה</button><div className="vtitle">יומן משותף</div></div>
@@ -761,11 +844,7 @@ export default function App() {
                       <div key={entry.id} className="log-entry">
                         <div className={`log-dot ${entry.parent}`} />
                         <div>
-                          <div className="log-text">
-                            {entry.parent === "system" ? <span style={{ color: "var(--green)" }}>{entry.note}</span> : (
-                              <><span className={`lw ${entry.parent}`}>{entry.parent === "dad" ? "אבא" : "אמא"}</span> סימן/ה: הילד/ים אצלי</>
-                            )}
-                          </div>
+                          <div className="log-text">{entry.parent === "system" ? <span style={{ color: "var(--green)" }}>{entry.note}</span> : <><span className={`lw ${entry.parent}`}>{entry.parent === "dad" ? "אבא" : "אמא"}</span> סימן/ה: הילד/ים אצלי</>}</div>
                           <div className="log-time">{formatDate(entry.timestamp)}</div>
                         </div>
                       </div>
@@ -778,20 +857,16 @@ export default function App() {
           </div>
         )}
 
-        {/* ═══ CALENDAR ═══ */}
         {view === "calendar" && (
           <div className="view">
             <div className="vheader"><button className="back-btn" onClick={() => setView("home")}>← חזרה</button><div className="vtitle">לוח שנה</div></div>
             <div className="vbody">
               {loading && <div className="loading-spinner">טוען...</div>}
-              {!loading && data?.schedule && (
-                <Calendar schedule={data.schedule} liveLog={data.liveLog || []} swapLog={data.swapLog || []} />
-              )}
+              {!loading && data?.schedule && <Calendar schedule={data.schedule} liveLog={data.liveLog || []} swapLog={data.swapLog || []} />}
             </div>
           </div>
         )}
 
-        {/* ═══ SCHEDULE ═══ */}
         {view === "schedule" && (
           <div className="view">
             <div className="vheader"><button className="back-btn" onClick={() => setView("home")}>← חזרה</button><div className="vtitle">סדר קבוע מראש</div></div>
@@ -806,19 +881,13 @@ export default function App() {
                   </div>
                   <div className="week-view">
                     {DAYS_HE.map((day, i) => {
-                      const label = getDayLabel(i);
-                      const wk = getWeekNumber();
+                      const label = getDayLabel(i), wk = getWeekNumber();
                       let who = label, note = "";
-                      if (label === "rotating") {
-                        const dadWk = sched.rotating.currentWeekDad ? wk % 2 === 0 : wk % 2 !== 0;
-                        who = dadWk ? "dad" : "mom"; note = "שבועי מתחלף";
-                      }
+                      if (label === "rotating") { const dadWk = sched.rotating.currentWeekDad ? wk % 2 === 0 : wk % 2 !== 0; who = dadWk ? "dad" : "mom"; note = "שבועי מתחלף"; }
                       return (
                         <div className="week-day" key={i}>
                           <div className="wdn">{day}</div>
-                          <div className={`wdb ${label === "rotating" ? "rot" : who || "none"}`}>
-                            {who === "dad" ? "👨 אבא" : who === "mom" ? "👩 אמא" : "לא מוגדר"}
-                          </div>
+                          <div className={`wdb ${label === "rotating" ? "rot" : who || "none"}`}>{who === "dad" ? "👨 אבא" : who === "mom" ? "👩 אמא" : "לא מוגדר"}</div>
                           {note && <div className="wdn2">{note}</div>}
                         </div>
                       );
@@ -831,21 +900,12 @@ export default function App() {
                   <div className="sched-section">
                     <div className="sched-title">ימים קבועים לאבא 👨</div>
                     <div className="instr">לחץ על יום להוספה/הסרה</div>
-                    <div className="days-grid">
-                      {DAYS_HE.map((d, i) => { const l = getTmpLabel(i); return <div key={i} className={`dp ${l === "dad" ? "dad" : ""} ${l === "mom" || l === "rot" ? "disabled" : ""}`} onClick={() => toggleFixed(i, "dad")}>{d.slice(0, 2)}</div>; })}
-                    </div>
+                    <div className="days-grid">{DAYS_HE.map((d, i) => { const l = getTmpLabel(i); return <div key={i} className={`dp ${l === "dad" ? "dad" : ""} ${l === "mom" || l === "rot" ? "disabled" : ""}`} onClick={() => toggleFixed(i, "dad")}>{d.slice(0, 2)}</div>; })}</div>
                     <div className="sched-title" style={{ marginTop: 16 }}>ימים קבועים לאמא 👩</div>
-                    <div className="days-grid">
-                      {DAYS_HE.map((d, i) => { const l = getTmpLabel(i); return <div key={i} className={`dp ${l === "mom" ? "mom" : ""} ${l === "dad" || l === "rot" ? "disabled" : ""}`} onClick={() => toggleFixed(i, "mom")}>{d.slice(0, 2)}</div>; })}
-                    </div>
+                    <div className="days-grid">{DAYS_HE.map((d, i) => { const l = getTmpLabel(i); return <div key={i} className={`dp ${l === "mom" ? "mom" : ""} ${l === "dad" || l === "rot" ? "disabled" : ""}`} onClick={() => toggleFixed(i, "mom")}>{d.slice(0, 2)}</div>; })}</div>
                     <div className="sched-title" style={{ marginTop: 16 }}>ימים מתחלפים 🔄</div>
-                    <div className="days-grid">
-                      {DAYS_HE.map((d, i) => { const l = getTmpLabel(i); return <div key={i} className={`dp ${l === "rot" ? "rot" : ""} ${l === "dad" || l === "mom" ? "disabled" : ""}`} onClick={() => toggleRot(i)}>{d.slice(0, 2)}</div>; })}
-                    </div>
-                    <div className="toggle-row">
-                      <span>השבוע הנוכחי — ימים המתחלפים אצל אבא?</span>
-                      <div className={`toggle ${tmpRotDad ? "on" : ""}`} onClick={() => setTmpRotDad(v => !v)} />
-                    </div>
+                    <div className="days-grid">{DAYS_HE.map((d, i) => { const l = getTmpLabel(i); return <div key={i} className={`dp ${l === "rot" ? "rot" : ""} ${l === "dad" || l === "mom" ? "disabled" : ""}`} onClick={() => toggleRot(i)}>{d.slice(0, 2)}</div>; })}</div>
+                    <div className="toggle-row"><span>השבוע הנוכחי — ימים המתחלפים אצל אבא?</span><div className={`toggle ${tmpRotDad ? "on" : ""}`} onClick={() => setTmpRotDad(v => !v)} /></div>
                   </div>
                   <button className="save-btn" onClick={saveSchedule} disabled={saving}>{saving ? "שומר..." : "💾 שמור סדר"}</button>
                   <button className="cancel-btn" onClick={() => setEditSchedule(false)}>ביטול</button>
@@ -855,7 +915,6 @@ export default function App() {
           </div>
         )}
 
-        {/* ═══ SWAP ═══ */}
         {view === "swap" && (
           <div className="view">
             <div className="vheader"><button className="back-btn" onClick={() => setView("home")}>← חזרה</button><div className="vtitle">בקשת החלפת יום</div></div>
@@ -879,19 +938,13 @@ export default function App() {
                 {hasPendingSwap && isSwapRequester && (
                   <div className="swap-sent-card">
                     <div className="swap-sent-title">⏳ הבקשה שלך ממתינה <span className="waiting-dots"><span /><span /><span /></span></div>
-                    <div className="swap-days-display" style={{ "--green": "var(--dad)", "--green-border": "var(--dad-border)" }}>
+                    <div className="swap-days-display">
                       <div className="swap-day-box" style={{ borderColor: "var(--dad-border)" }}><div className="sdb-who" style={{ color: "var(--dad-text)" }}>אתה נותן</div><div className="sdb-day" style={{ color: "var(--dad)" }}>{swap.offerDay.label}</div></div>
                       <div className="swap-arrow" style={{ color: "var(--dad)" }}>⇄</div>
                       <div className="swap-day-box" style={{ borderColor: "var(--dad-border)" }}><div className="sdb-who" style={{ color: "var(--dad-text)" }}>אתה רוצה</div><div className="sdb-day" style={{ color: "var(--dad)" }}>{swap.wantDay.label}</div></div>
                     </div>
                     <button className="swap-cancel-btn" onClick={cancelSwap} disabled={saving}>ביטול הבקשה</button>
-                    <button
-                      className="whatsapp-btn"
-                      style={{ marginTop: 8 }}
-                      onClick={() => sendWhatsApp(swap.offerDay, swap.wantDay)}
-                    >
-                      <span className="whatsapp-icon">📲</span> שלח שוב ב-WhatsApp
-                    </button>
+                    <button className="whatsapp-btn" style={{ marginTop: 8 }} onClick={() => sendWhatsApp(swap.offerDay, swap.wantDay)}>📲 שלח שוב ב-WhatsApp</button>
                   </div>
                 )}
                 {!hasPendingSwap && (
@@ -926,17 +979,7 @@ export default function App() {
                           })}
                         </div>
                         <button className="send-swap-btn" disabled={!wantDay || saving} onClick={sendSwap}>{saving ? "שולח..." : "💾 שמור בקשה"}</button>
-                        <button
-                          className="whatsapp-btn"
-                          disabled={!wantDay || saving}
-                          onClick={async () => {
-                            if (!wantDay || !offerDay) return;
-                            await sendSwap();
-                            sendWhatsApp(offerDay, wantDay);
-                          }}
-                        >
-                          <span className="whatsapp-icon">📲</span> שלח בקשה ב-WhatsApp
-                        </button>
+                        <button className="whatsapp-btn" disabled={!wantDay || saving} onClick={async () => { if (!wantDay || !offerDay) return; await sendSwap(); sendWhatsApp(offerDay, wantDay); }}>📲 שלח בקשה ב-WhatsApp</button>
                         <button className="cancel-btn" onClick={() => { setSwapStep(1); setWantDay(null); }}>← חזור</button>
                       </>)}
                     </>)}
