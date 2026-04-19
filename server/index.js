@@ -28,11 +28,10 @@ const DEFAULT_DATA = {
   currentWith: null, liveLog: [],
   schedule: { fixed: { dad: [0,1,2,3], mom: [] }, rotating: { days: [4,5,6], currentWeekDad: true } },
   swapRequest: null, swapLog: [],
-  notifications: []
-  // notification shape:
-  // { id, type: "swap_request"|"swap_approved"|"swap_rejected"|"schedule_changed",
-  //   createdAt, createdBy, payload: {},
-  //   seenBy: { dad: null|ISO, mom: null|ISO } }
+  notifications: [],
+  settings: { requirePickupApproval: false }
+  // notification types: "swap_request"|"swap_approved"|"swap_rejected"|"pickup_request"|"pickup_approved"|"pickup_rejected"
+  // notification shape: { id, type, createdAt, createdBy, payload, seenBy:{dad,mom}, requiresAction:bool }
 };
 
 function addNotification(data, type, createdBy, payload) {
@@ -55,6 +54,7 @@ function readFamilyData(id) {
     if (!d.swapRequest) d.swapRequest = null;
     if (!d.swapLog) d.swapLog = [];
     if (!d.notifications) d.notifications = [];
+    if (!d.settings) d.settings = { requirePickupApproval: false };
     return d;
   } catch { return { ...DEFAULT_DATA }; }
 }
@@ -178,11 +178,56 @@ app.get("/api/family/data", requireFamily, (req, res) => res.json(readFamilyData
 app.post("/api/family/mark", requireFamily, (req, res) => {
   const parent = req.role;
   const data = readFamilyData(req.familyId);
+
+  if (data.settings?.requirePickupApproval) {
+    // In approval mode — create a pickup_request notification instead of marking directly
+    addNotification(data, "pickup_request", parent, { requestedBy: parent, requestedAt: new Date().toISOString() });
+    writeFamilyData(req.familyId, data);
+    return res.json({ success: true, pending: true, message: "בקשת האיסוף נשלחה לאישור" });
+  }
+
+  // Normal mode — mark directly
   const entry = { id: Date.now(), parent, timestamp: new Date().toISOString(), note: `${parent === "dad" ? "אבא" : "אמא"} סימן/ה: הילד/ים אצלי` };
   data.currentWith = parent;
   data.liveLog = [entry, ...data.liveLog].slice(0, 500);
   writeFamilyData(req.familyId, data);
-  res.json({ success: true, entry, currentWith: data.currentWith });
+  res.json({ success: true, pending: false, entry, currentWith: data.currentWith });
+});
+
+// PUT /api/family/settings
+app.put("/api/family/settings", requireFamily, (req, res) => {
+  const { requirePickupApproval } = req.body;
+  const data = readFamilyData(req.familyId);
+  data.settings = { ...data.settings, requirePickupApproval: !!requirePickupApproval };
+  writeFamilyData(req.familyId, data);
+  res.json({ success: true, settings: data.settings });
+});
+
+// POST /api/family/pickup/respond — approve or reject pickup request
+app.post("/api/family/pickup/respond", requireFamily, (req, res) => {
+  const { notificationId, action } = req.body;
+  const respondedBy = req.role;
+  if (!["approve", "reject"].includes(action)) return res.status(400).json({ error: "Invalid action" });
+  const data = readFamilyData(req.familyId);
+  const notif = (data.notifications || []).find(n => n.id === notificationId && n.type === "pickup_request");
+  if (!notif) return res.status(404).json({ error: "Notification not found" });
+  if (notif.createdBy === respondedBy) return res.status(403).json({ error: "לא ניתן לאשר בקשה שלך" });
+
+  // Remove the original request notif
+  data.notifications = data.notifications.filter(n => n.id !== notificationId);
+
+  if (action === "approve") {
+    const parent = notif.payload.requestedBy;
+    const entry = { id: Date.now(), parent, timestamp: new Date().toISOString(), note: `${parent === "dad" ? "אבא" : "אמא"} סימן/ה: הילד/ים אצלי (אושר)` };
+    data.currentWith = parent;
+    data.liveLog = [entry, ...data.liveLog].slice(0, 500);
+    addNotification(data, "pickup_approved", respondedBy, { approvedFor: parent });
+  } else {
+    addNotification(data, "pickup_rejected", respondedBy, { rejectedFor: notif.payload.requestedBy });
+  }
+
+  writeFamilyData(req.familyId, data);
+  res.json({ success: true, action });
 });
 
 app.delete("/api/family/log", requireFamily, (req, res) => {
@@ -237,13 +282,12 @@ app.delete("/api/family/swap", requireFamily, (req, res) => {
   res.json({ success: true });
 });
 
-// PUT /api/family/schedule — with notification
+// PUT /api/family/schedule
 app.put("/api/family/schedule", requireFamily, (req, res) => {
   const { schedule } = req.body;
   if (!schedule?.fixed || !schedule?.rotating) return res.status(400).json({ error: "Invalid schedule" });
   const data = readFamilyData(req.familyId);
   data.schedule = schedule;
-  addNotification(data, "schedule_changed", req.role, { schedule });
   writeFamilyData(req.familyId, data);
   res.json({ success: true, schedule: data.schedule });
 });

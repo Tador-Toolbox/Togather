@@ -502,17 +502,19 @@ const todayHeDate = () => {
 };
 
 const NOTIF_LABELS = {
-  swap_request: { icon: "🔄", title: "בקשת החלפת יום", color: "unseen" },
-  swap_approved: { icon: "✅", title: "ההחלפה אושרה", color: "green-notif unseen" },
-  swap_rejected: { icon: "❌", title: "ההחלפה נדחתה", color: "unseen" },
-  schedule_changed: { icon: "📅", title: "הסדר הקבוע עודכן", color: "unseen" },
+  swap_request:    { icon: "🔄", title: "בקשת החלפת יום",   green: false, actionFor: "other" },
+  swap_approved:   { icon: "✅", title: "ההחלפה אושרה",       green: true,  actionFor: null    },
+  swap_rejected:   { icon: "❌", title: "ההחלפה נדחתה",       green: false, actionFor: null    },
+  schedule_changed:{ icon: "📅", title: "הסדר הקבוע עודכן",   green: false, actionFor: null    },
+  pickup_request:  { icon: "👶", title: "בקשת איסוף ילד/ים", green: false, actionFor: "other" },
+  pickup_approved: { icon: "✅", title: "האיסוף אושר",         green: true,  actionFor: null    },
+  pickup_rejected: { icon: "❌", title: "האיסוף נדחה",         green: false, actionFor: null    },
 };
 
-function NotificationPanel({ notifications, role, onSeen, onDismiss, onRespondSwap, onClose }) {
-  // Mark all unseen as seen on mount
+function NotificationPanel({ notifications, role, onSeen, onDismiss, onRespondSwap, onRespondPickup, onClose }) {
   useEffect(() => {
-    (notifications || []).forEach(n => { if (!n.seenBy[role]) onSeen(n.id); });
-  }, []);  // eslint-disable-line
+    (notifications || []).forEach(n => { if (!n.seenBy?.[role]) onSeen(n.id); });
+  }, []); // eslint-disable-line
 
   const fmt = (iso) => new Date(iso).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
 
@@ -526,42 +528,48 @@ function NotificationPanel({ notifications, role, onSeen, onDismiss, onRespondSw
         </div>
         <div className="notif-list">
           {(!notifications || notifications.length === 0) && (
-            <div className="notif-empty">אין התראות חדשות</div>
+            <div className="notif-empty">אין התראות</div>
           )}
           {(notifications || []).map(n => {
-            const meta = NOTIF_LABELS[n.type] || { icon: "📢", title: n.type, color: "unseen" };
-            const isSeen = !!n.seenBy[role];
+            const meta = NOTIF_LABELS[n.type] || { icon: "📢", title: n.type, green: false, actionFor: null };
+            const isSeen = !!n.seenBy?.[role];
             const otherRole = role === "dad" ? "mom" : "dad";
-            const otherSeen = !!n.seenBy[otherRole];
-            const isSwapRequest = n.type === "swap_request" && n.createdBy !== role;
+            const otherSeen = !!n.seenBy?.[otherRole];
+            const canAct = meta.actionFor === "other" && n.createdBy !== role;
+            const bgClass = !isSeen ? (meta.green ? "unseen green-notif" : "unseen") : "";
             return (
-              <div key={n.id} className={`notif-item ${isSeen ? "" : meta.color}`}>
+              <div key={n.id} className={`notif-item ${bgClass}`}>
                 <div className="notif-item-top">
                   <div className="notif-icon">{meta.icon}</div>
                   <div className="notif-text">
                     <div className="notif-title">{meta.title}</div>
                     {n.payload?.offerDay && (
-                      <div className="notif-sub">
-                        {n.payload.offerDay.label} ↔ {n.payload.wantDay.label}
-                      </div>
+                      <div className="notif-sub">{n.payload.offerDay.label} ↔ {n.payload.wantDay.label}</div>
+                    )}
+                    {n.type === "pickup_request" && (
+                      <div className="notif-sub">{n.createdBy === "dad" ? "אבא" : "אמא"} מבקש/ת לסמן שהילד/ים אצלו/ה</div>
                     )}
                     {n.type === "schedule_changed" && (
-                      <div className="notif-sub">
-                        {n.createdBy === "dad" ? "אבא" : "אמא"} עדכן/ה את הסדר הקבוע
-                      </div>
+                      <div className="notif-sub">{n.createdBy === "dad" ? "אבא" : "אמא"} עדכן/ה את הסדר הקבוע</div>
                     )}
                     <div className="notif-time">{fmt(n.createdAt)}</div>
                     <div className="notif-seen">
                       {role === "dad" ? "👨 אתה" : "👩 את"}: <span>ראית</span>
                       {" · "}
-                      {otherRole === "dad" ? "👨" : "👩"} {otherSeen ? <span>ראה/ראתה</span> : "טרם ראה/ראתה"}
+                      {otherRole === "dad" ? "👨" : "👩"}: {otherSeen ? <span>ראה/ראתה</span> : "טרם ראה/ראתה"}
                     </div>
                   </div>
                 </div>
-                {isSwapRequest && (
+                {canAct && n.type === "swap_request" && (
                   <div className="notif-actions">
-                    <button className="notif-approve" onClick={() => { onRespondSwap("approve"); onClose(); }}>✅ אשר</button>
+                    <button className="notif-approve" onClick={() => { onRespondSwap("approve"); onClose(); }}>✅ אשר החלפה</button>
                     <button className="notif-reject" onClick={() => { onRespondSwap("reject"); onClose(); }}>❌ דחה</button>
+                  </div>
+                )}
+                {canAct && n.type === "pickup_request" && (
+                  <div className="notif-actions">
+                    <button className="notif-approve" onClick={() => { onRespondPickup(n.id, "approve"); onClose(); }}>✅ אשר איסוף</button>
+                    <button className="notif-reject" onClick={() => { onRespondPickup(n.id, "reject"); onClose(); }}>❌ דחה</button>
                   </div>
                 )}
                 <button className="notif-dismiss" onClick={() => onDismiss(n.id)}>הסר התראה</button>
@@ -573,7 +581,6 @@ function NotificationPanel({ notifications, role, onSeen, onDismiss, onRespondSw
     </div>
   );
 }
-
 
   const [adminPwd] = useState(() => localStorage.getItem("tg_admin_pwd") || "");
   const [families, setFamilies] = useState([]);
@@ -837,8 +844,13 @@ export default function App() {
     setSaving(true);
     try {
       const res = await apiFetch("/api/family/mark", { method: "POST", body: JSON.stringify({}) }, session);
-      setData(prev => ({ ...prev, currentWith: res.currentWith, liveLog: [res.entry, ...prev.liveLog] }));
-      showToast(`✓ ${session.role === "dad" ? "אבא" : "אמא"} סימן/ה בהצלחה`, session.role);
+      if (res.pending) {
+        showToast("📨 בקשת האיסוף נשלחה לאישור", "ok");
+        await loadData();
+      } else {
+        setData(prev => ({ ...prev, currentWith: res.currentWith, liveLog: [res.entry, ...prev.liveLog] }));
+        showToast(`✓ ${session.role === "dad" ? "אבא" : "אמא"} סימן/ה בהצלחה`, session.role);
+      }
     } catch (e) { setError(e.message); }
     finally { setSaving(false); }
   };
@@ -912,6 +924,19 @@ export default function App() {
       await apiFetch(`/api/family/notifications/${notificationId}`, { method: "DELETE" }, session);
       setData(prev => ({ ...prev, notifications: (prev.notifications || []).filter(n => n.id !== notificationId) }));
     } catch {}
+  };
+  const respondPickup = async (notificationId, action) => {
+    try {
+      await apiFetch("/api/family/pickup/respond", { method: "POST", body: JSON.stringify({ notificationId, action }) }, session);
+      await loadData();
+      showToast(action === "approve" ? "✓ האיסוף אושר!" : "האיסוף נדחה", action === "approve" ? "ok" : "err");
+    } catch (e) { showToast(e.message, "err"); }
+  };
+  const updateSettings = async (key, value) => {
+    try {
+      const res = await apiFetch("/api/family/settings", { method: "PUT", body: JSON.stringify({ [key]: value }) }, session);
+      setData(prev => ({ ...prev, settings: res.settings }));
+    } catch (e) { showToast(e.message, "err"); }
   };
     const selfName = role === "dad" ? "אבא" : "אמא";
     const msg = `שלום! ${selfName} מבקש/ת החלפת יום 🔄\n\n📅 אני נותן/ת: *${offer.label}*\n📅 אני רוצה: *${want.label}*\n\nלאישור או דחייה:\n${APP_URL}`;
@@ -1090,6 +1115,21 @@ export default function App() {
                     })}
                   </div>
                   <button className="edit-btn" onClick={startEdit}>✏️ עריכת הסדר</button>
+
+                  {/* Settings */}
+                  <div style={{ marginTop: 20, borderTop: "1px solid var(--border)", paddingTop: 16 }}>
+                    <div className="sched-title" style={{ marginBottom: 12 }}>⚙️ הגדרות</div>
+                    <div className="toggle-row">
+                      <div>
+                        <div style={{ fontSize: 13, color: "var(--text)" }}>👶 איסוף ילד דורש אישור</div>
+                        <div style={{ fontSize: 11, color: "var(--text3)", marginTop: 2 }}>סימון ישלח התראה לאישור הצד השני</div>
+                      </div>
+                      <div
+                        className={`toggle ${data?.settings?.requirePickupApproval ? "on" : ""}`}
+                        onClick={() => updateSettings("requirePickupApproval", !data?.settings?.requirePickupApproval)}
+                      />
+                    </div>
+                  </div>
                 </>
               ) : (
                 <>
@@ -1209,6 +1249,7 @@ export default function App() {
           onSeen={markSeen}
           onDismiss={dismissNotif}
           onRespondSwap={async (action) => { await respondSwap(action); setShowNotifs(false); }}
+          onRespondPickup={async (id, action) => { await respondPickup(id, action); setShowNotifs(false); }}
           onClose={() => { setShowNotifs(false); loadData(); }}
         />
       )}
