@@ -139,7 +139,7 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .empty-families{text-align:center;padding:32px;color:var(--text3);font-size:13px}
 
 /* ── HOME ── */
-.home{min-height:100vh;display:flex;flex-direction:column;padding:40px 24px 32px}
+.home{min-height:100vh;display:flex;flex-direction:column;padding:20px 24px 32px}
 .home-header{text-align:center;margin-bottom:28px}
 .home-icon{font-size:48px;display:block;margin-bottom:10px}
 .home-title{font-family:'Fraunces',serif;font-size:30px;font-weight:300;color:var(--text)}
@@ -352,6 +352,40 @@ html,body{height:100%;background:var(--bg);font-family:'DM Sans',sans-serif;colo
 .toast.mom{background:var(--mom-bg);border:1px solid var(--mom-border);color:var(--mom-text)}
 .toast.ok{background:var(--green-bg);border:1px solid var(--green-border);color:var(--green)}
 .toast.err{background:var(--red-bg);border:1px solid var(--red-border);color:var(--red)}
+/* ── NOTIFICATIONS ── */
+.notif-bell{position:relative;background:var(--surface);border:1px solid var(--border);border-radius:10px;width:40px;height:40px;display:flex;align-items:center;justify-content:center;cursor:pointer;font-size:18px;flex-shrink:0;transition:all .15s}
+.notif-bell:hover{background:var(--surface2)}
+.notif-badge{position:absolute;top:-5px;left:-5px;background:var(--red);color:#fff;border-radius:10px;font-size:10px;padding:1px 5px;font-weight:700;min-width:18px;text-align:center}
+.notif-panel{position:fixed;inset:0;z-index:200;display:flex;flex-direction:column;justify-content:flex-end}
+.notif-backdrop{position:absolute;inset:0;background:rgba(0,0,0,.3)}
+.notif-sheet{position:relative;background:var(--surface);border-radius:20px 20px 0 0;max-height:80vh;overflow-y:auto;z-index:1}
+.notif-sheet-header{padding:16px 18px 12px;border-bottom:1px solid var(--border);display:flex;align-items:center;justify-content:space-between;position:sticky;top:0;background:var(--surface)}
+.notif-sheet-title{font-family:'Fraunces',serif;font-size:17px;font-weight:300;color:var(--text)}
+.notif-close{background:none;border:none;font-size:18px;cursor:pointer;color:var(--text3)}
+.notif-list{padding:12px 16px;display:flex;flex-direction:column;gap:10px}
+.notif-item{background:var(--surface2);border:1px solid var(--border);border-radius:12px;padding:13px 14px}
+.notif-item.unseen{background:var(--dad-bg);border-color:var(--dad-border)}
+.notif-item.unseen.mom-notif{background:var(--mom-bg);border-color:var(--mom-border)}
+.notif-item.unseen.green-notif{background:var(--green-bg);border-color:var(--green-border)}
+.notif-item-top{display:flex;align-items:flex-start;gap:8px;margin-bottom:8px}
+.notif-icon{font-size:18px;flex-shrink:0;margin-top:1px}
+.notif-text{flex:1}
+.notif-title{font-size:13px;font-weight:500;color:var(--text);margin-bottom:2px}
+.notif-sub{font-size:11px;color:var(--text2);line-height:1.5}
+.notif-time{font-size:10px;color:var(--text3);margin-top:3px}
+.notif-seen{font-size:10px;color:var(--text3);margin-top:2px}
+.notif-seen span{color:var(--green)}
+.notif-actions{display:grid;grid-template-columns:1fr 1fr;gap:6px;margin-top:8px}
+.notif-approve{background:var(--green);border:none;color:#fff;border-radius:8px;padding:8px;cursor:pointer;font-size:12px;font-weight:500;font-family:'DM Sans',sans-serif}
+.notif-reject{background:var(--red-bg);border:1px solid var(--red-border);color:var(--red);border-radius:8px;padding:8px;cursor:pointer;font-size:12px;font-weight:500;font-family:'DM Sans',sans-serif}
+.notif-dismiss{background:none;border:none;color:var(--text3);font-size:11px;cursor:pointer;margin-top:4px;font-family:'DM Sans',sans-serif;text-decoration:underline}
+.notif-empty{text-align:center;padding:32px;color:var(--text3);font-size:13px}
+
+/* date bar */
+.date-bar{background:var(--surface);border-bottom:1px solid var(--border);padding:10px 18px;display:flex;align-items:center;justify-content:space-between}
+.date-bar-text{font-size:13px;color:var(--text2)}
+.date-bar-day{font-weight:500;color:var(--text)}
+
 @keyframes fadeup{from{opacity:0;transform:translate(-50%,10px)}to{opacity:1;transform:translate(-50%,0)}}
 `;
 
@@ -459,7 +493,88 @@ function Calendar({ schedule, liveLog, swapLog }) {
 }
 
 // ── Admin Panel ───────────────────────────────────────────────────────────────
-function AdminPanel({ onLogout }) {
+// ── Helpers ───────────────────────────────────────────────────────────────────
+const todayHeDate = () => {
+  const d = new Date();
+  const day = DAYS_HE[d.getDay()];
+  const date = d.toLocaleDateString("he-IL", { day: "numeric", month: "long", year: "numeric" });
+  return { day, date };
+};
+
+const NOTIF_LABELS = {
+  swap_request: { icon: "🔄", title: "בקשת החלפת יום", color: "unseen" },
+  swap_approved: { icon: "✅", title: "ההחלפה אושרה", color: "green-notif unseen" },
+  swap_rejected: { icon: "❌", title: "ההחלפה נדחתה", color: "unseen" },
+  schedule_changed: { icon: "📅", title: "הסדר הקבוע עודכן", color: "unseen" },
+};
+
+function NotificationPanel({ notifications, role, onSeen, onDismiss, onRespondSwap, onClose }) {
+  // Mark all unseen as seen on mount
+  useEffect(() => {
+    (notifications || []).forEach(n => { if (!n.seenBy[role]) onSeen(n.id); });
+  }, []);  // eslint-disable-line
+
+  const fmt = (iso) => new Date(iso).toLocaleString("he-IL", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" });
+
+  return (
+    <div className="notif-panel">
+      <div className="notif-backdrop" onClick={onClose} />
+      <div className="notif-sheet">
+        <div className="notif-sheet-header">
+          <div className="notif-sheet-title">🔔 התראות</div>
+          <button className="notif-close" onClick={onClose}>✕</button>
+        </div>
+        <div className="notif-list">
+          {(!notifications || notifications.length === 0) && (
+            <div className="notif-empty">אין התראות חדשות</div>
+          )}
+          {(notifications || []).map(n => {
+            const meta = NOTIF_LABELS[n.type] || { icon: "📢", title: n.type, color: "unseen" };
+            const isSeen = !!n.seenBy[role];
+            const otherRole = role === "dad" ? "mom" : "dad";
+            const otherSeen = !!n.seenBy[otherRole];
+            const isSwapRequest = n.type === "swap_request" && n.createdBy !== role;
+            return (
+              <div key={n.id} className={`notif-item ${isSeen ? "" : meta.color}`}>
+                <div className="notif-item-top">
+                  <div className="notif-icon">{meta.icon}</div>
+                  <div className="notif-text">
+                    <div className="notif-title">{meta.title}</div>
+                    {n.payload?.offerDay && (
+                      <div className="notif-sub">
+                        {n.payload.offerDay.label} ↔ {n.payload.wantDay.label}
+                      </div>
+                    )}
+                    {n.type === "schedule_changed" && (
+                      <div className="notif-sub">
+                        {n.createdBy === "dad" ? "אבא" : "אמא"} עדכן/ה את הסדר הקבוע
+                      </div>
+                    )}
+                    <div className="notif-time">{fmt(n.createdAt)}</div>
+                    <div className="notif-seen">
+                      {role === "dad" ? "👨 אתה" : "👩 את"}: <span>ראית</span>
+                      {" · "}
+                      {otherRole === "dad" ? "👨" : "👩"} {otherSeen ? <span>ראה/ראתה</span> : "טרם ראה/ראתה"}
+                    </div>
+                  </div>
+                </div>
+                {isSwapRequest && (
+                  <div className="notif-actions">
+                    <button className="notif-approve" onClick={() => { onRespondSwap("approve"); onClose(); }}>✅ אשר</button>
+                    <button className="notif-reject" onClick={() => { onRespondSwap("reject"); onClose(); }}>❌ דחה</button>
+                  </div>
+                )}
+                <button className="notif-dismiss" onClick={() => onDismiss(n.id)}>הסר התראה</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
   const [adminPwd] = useState(() => localStorage.getItem("tg_admin_pwd") || "");
   const [families, setFamilies] = useState([]);
   const [newName, setNewName] = useState("");
@@ -693,6 +808,7 @@ export default function App() {
   const [swapStep, setSwapStep] = useState(1);
   const [offerDay, setOfferDay] = useState(null);
   const [wantDay, setWantDay] = useState(null);
+  const [showNotifs, setShowNotifs] = useState(false);
 
   const handleLogin = (s) => { saveSession(s); setSession(s); setIsAdmin(false); };
   const handleAdminLogin = () => { setIsAdmin(true); setSession(null); };
@@ -787,7 +903,16 @@ export default function App() {
     } catch (e) { showToast(e.message, "err"); }
     finally { setSaving(false); }
   };
-  const sendWhatsApp = (offer, want) => {
+  const markSeen = async (notificationId) => {
+    try { await apiFetch("/api/family/notifications/seen", { method: "POST", body: JSON.stringify({ notificationId }) }, session); }
+    catch {}
+  };
+  const dismissNotif = async (notificationId) => {
+    try {
+      await apiFetch(`/api/family/notifications/${notificationId}`, { method: "DELETE" }, session);
+      setData(prev => ({ ...prev, notifications: (prev.notifications || []).filter(n => n.id !== notificationId) }));
+    } catch {}
+  };
     const selfName = role === "dad" ? "אבא" : "אמא";
     const msg = `שלום! ${selfName} מבקש/ת החלפת יום 🔄\n\n📅 אני נותן/ת: *${offer.label}*\n📅 אני רוצה: *${want.label}*\n\nלאישור או דחייה:\n${APP_URL}`;
     window.open(`https://wa.me/?text=${encodeURIComponent(msg)}`, "_blank");
@@ -817,6 +942,23 @@ export default function App() {
 
         {view === "home" && (
           <div className="home">
+            {/* Date bar */}
+            {(() => { const { day, date } = todayHeDate(); return (
+              <div className="date-bar">
+                <div className="date-bar-text"><span className="date-bar-day">{day}</span> · {date}</div>
+                {/* Notification Bell */}
+                {(() => {
+                  const notifs = data?.notifications || [];
+                  const unread = notifs.filter(n => !n.seenBy[role]).length;
+                  return (
+                    <div className="notif-bell" onClick={() => setShowNotifs(true)}>
+                      🔔
+                      {unread > 0 && <div className="notif-badge">{unread}</div>}
+                    </div>
+                  );
+                })()}
+              </div>
+            ); })()}
             <div className="home-header">
               <span className="home-icon">👨‍👩‍👧</span>
               <div className="home-title">Togather</div>
@@ -1058,6 +1200,18 @@ export default function App() {
         )}
 
       </div>
+
+      {/* Notification panel */}
+      {showNotifs && (
+        <NotificationPanel
+          notifications={data?.notifications || []}
+          role={role}
+          onSeen={markSeen}
+          onDismiss={dismissNotif}
+          onRespondSwap={async (action) => { await respondSwap(action); setShowNotifs(false); }}
+          onClose={() => { setShowNotifs(false); loadData(); }}
+        />
+      )}
     </>
   );
 }

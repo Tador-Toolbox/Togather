@@ -27,8 +27,25 @@ function getFamilyFile(id) { return path.join(DATA_DIR, `family_${id}.json`); }
 const DEFAULT_DATA = {
   currentWith: null, liveLog: [],
   schedule: { fixed: { dad: [0,1,2,3], mom: [] }, rotating: { days: [4,5,6], currentWeekDad: true } },
-  swapRequest: null, swapLog: []
+  swapRequest: null, swapLog: [],
+  notifications: []
+  // notification shape:
+  // { id, type: "swap_request"|"swap_approved"|"swap_rejected"|"schedule_changed",
+  //   createdAt, createdBy, payload: {},
+  //   seenBy: { dad: null|ISO, mom: null|ISO } }
 };
+
+function addNotification(data, type, createdBy, payload) {
+  const notif = {
+    id: Date.now(),
+    type, createdBy, payload,
+    createdAt: new Date().toISOString(),
+    seenBy: { dad: null, mom: null }
+  };
+  if (!data.notifications) data.notifications = [];
+  data.notifications = [notif, ...data.notifications].slice(0, 50);
+  return notif;
+}
 
 function readFamilyData(id) {
   try {
@@ -37,6 +54,7 @@ function readFamilyData(id) {
     const d = JSON.parse(fs.readFileSync(file, "utf8"));
     if (!d.swapRequest) d.swapRequest = null;
     if (!d.swapLog) d.swapLog = [];
+    if (!d.notifications) d.notifications = [];
     return d;
   } catch { return { ...DEFAULT_DATA }; }
 }
@@ -167,15 +185,6 @@ app.post("/api/family/mark", requireFamily, (req, res) => {
   res.json({ success: true, entry, currentWith: data.currentWith });
 });
 
-app.put("/api/family/schedule", requireFamily, (req, res) => {
-  const { schedule } = req.body;
-  if (!schedule?.fixed || !schedule?.rotating) return res.status(400).json({ error: "Invalid schedule" });
-  const data = readFamilyData(req.familyId);
-  data.schedule = schedule;
-  writeFamilyData(req.familyId, data);
-  res.json({ success: true, schedule: data.schedule });
-});
-
 app.delete("/api/family/log", requireFamily, (req, res) => {
   const data = readFamilyData(req.familyId);
   data.liveLog = []; data.currentWith = null;
@@ -190,6 +199,7 @@ app.post("/api/family/swap", requireFamily, (req, res) => {
   const data = readFamilyData(req.familyId);
   if (data.swapRequest?.status === "pending") return res.status(409).json({ error: "כבר קיימת בקשה פתוחה" });
   data.swapRequest = { id: Date.now(), requestedBy, requestedAt: new Date().toISOString(), offerDay, wantDay, status: "pending", respondedAt: null };
+  addNotification(data, "swap_request", requestedBy, { offerDay, wantDay });
   writeFamilyData(req.familyId, data);
   res.json({ success: true, swapRequest: data.swapRequest });
 });
@@ -201,14 +211,15 @@ app.put("/api/family/swap/respond", requireFamily, (req, res) => {
   const data = readFamilyData(req.familyId);
   if (!data.swapRequest || data.swapRequest.status !== "pending") return res.status(404).json({ error: "אין בקשה פתוחה" });
   if (data.swapRequest.requestedBy === respondedBy) return res.status(403).json({ error: "לא ניתן לאשר בקשה שלך" });
+  const { offerDay, wantDay, requestedBy } = data.swapRequest;
   data.swapRequest.status = action === "approve" ? "approved" : "rejected";
   data.swapRequest.respondedAt = new Date().toISOString();
   if (action === "approve") {
-    const { offerDay, wantDay, requestedBy } = data.swapRequest;
     const self = requestedBy === "dad" ? "אבא" : "אמא", other = requestedBy === "dad" ? "אמא" : "אבא";
     data.liveLog = [{ id: Date.now(), parent: "system", timestamp: new Date().toISOString(), note: `✅ החלפה אושרה: ${offerDay.label} (${self}) ↔ ${wantDay.label} (${other})` }, ...data.liveLog].slice(0, 500);
   }
   data.swapLog = [{ ...data.swapRequest }, ...data.swapLog].slice(0, 100);
+  addNotification(data, action === "approve" ? "swap_approved" : "swap_rejected", respondedBy, { offerDay, wantDay });
   data.swapRequest = null;
   writeFamilyData(req.familyId, data);
   res.json({ success: true });
@@ -222,6 +233,38 @@ app.delete("/api/family/swap", requireFamily, (req, res) => {
   data.swapRequest.status = "cancelled";
   data.swapLog = [{ ...data.swapRequest }, ...data.swapLog].slice(0, 100);
   data.swapRequest = null;
+  writeFamilyData(req.familyId, data);
+  res.json({ success: true });
+});
+
+// PUT /api/family/schedule — with notification
+app.put("/api/family/schedule", requireFamily, (req, res) => {
+  const { schedule } = req.body;
+  if (!schedule?.fixed || !schedule?.rotating) return res.status(400).json({ error: "Invalid schedule" });
+  const data = readFamilyData(req.familyId);
+  data.schedule = schedule;
+  addNotification(data, "schedule_changed", req.role, { schedule });
+  writeFamilyData(req.familyId, data);
+  res.json({ success: true, schedule: data.schedule });
+});
+
+// POST /api/family/notifications/seen — mark notification as seen
+app.post("/api/family/notifications/seen", requireFamily, (req, res) => {
+  const { notificationId } = req.body;
+  const role = req.role;
+  const data = readFamilyData(req.familyId);
+  const notif = (data.notifications || []).find(n => n.id === notificationId);
+  if (notif && !notif.seenBy[role]) {
+    notif.seenBy[role] = new Date().toISOString();
+    writeFamilyData(req.familyId, data);
+  }
+  res.json({ success: true });
+});
+
+// DELETE /api/family/notifications/:id — dismiss a notification
+app.delete("/api/family/notifications/:id", requireFamily, (req, res) => {
+  const data = readFamilyData(req.familyId);
+  data.notifications = (data.notifications || []).filter(n => n.id !== parseInt(req.params.id));
   writeFamilyData(req.familyId, data);
   res.json({ success: true });
 });
